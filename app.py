@@ -203,7 +203,8 @@ def db_delete_appointment(appt_id):
 
 def get_course_end_date(date_prescribed, duration_str):
     """Parse duration string and return end date."""
-    if not date_prescribed or not duration_str: return None
+    duration_str = duration_str or ""
+    if not date_prescribed or not duration_str.strip(): return None
     try:
         start = datetime.strptime(date_prescribed[:10], "%Y-%m-%d").date()
         dl = duration_str.lower()
@@ -499,7 +500,9 @@ elif "Medications" in page:
             stale=is_stale(m.get("date_prescribed"),90)
             tag='<span class="tag-stale">⚠️ POSSIBLY STALE</span>' if stale else '<span class="tag-verified">✓ VERIFIED</span>'
             # Course status for short-duration medications
-            course_status = get_course_status(m.get("date_prescribed"), m.get("duration",""))
+            _dur = m.get("duration") or ""
+            if _dur == "None": _dur = ""
+            course_status = get_course_status(m.get("date_prescribed"), _dur)
             course_tag = ""
             course_warning = ""
             if course_status is not None:
