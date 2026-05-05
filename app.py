@@ -12,7 +12,7 @@ from datetime import datetime, date
 from supabase import create_client
 
 st.set_page_config(page_title="CareCircle", page_icon="🔵", layout="wide", initial_sidebar_state="expanded")
-# v2.1
+# v2.2
 
 st.markdown("""
 <style>
