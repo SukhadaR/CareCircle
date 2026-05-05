@@ -119,6 +119,24 @@ def db_save_alerts(pid, interactions):
                 "drugs": i["drugs_involved"], "summary": i["what_happens"], "action": i["what_to_do"], "urgency": i["urgency"]}).execute()
     except Exception as e: st.error(f"Error: {e}")
 
+def db_delete_medication(med_id):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("medications").delete().eq("id", med_id).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def db_delete_lab_report(report_id):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("lab_reports").delete().eq("id", report_id).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def db_delete_caregiver_update(update_id):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("caregiver_updates").delete().eq("id", update_id).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
 def get_ai_client():
     key = st.session_state.get("api_key", "") or st.secrets.get("ANTHROPIC_API_KEY", "")
     if not key: return None
@@ -355,7 +373,12 @@ elif "Medications" in page:
         for m in meds:
             stale=is_stale(m.get("date_prescribed"),90)
             tag='<span class="tag-stale">⚠️ POSSIBLY STALE</span>' if stale else '<span class="tag-verified">✓ VERIFIED</span>'
-            st.markdown(f'''<div class="med-card {'stale' if stale else ''}"><div class="mname">{m["name"]} {m["dosage"]} &nbsp; {tag}</div><div class="minfo">📅 {m["frequency"]}{" &nbsp;·&nbsp; "+m["instructions"] if m.get("instructions") else ""}</div><div class="msrc">Prescribed {days_ago(m.get("date_prescribed"))} by {m.get("prescribing_doctor","Unknown")} &nbsp;·&nbsp; Source: {m.get("source","Unknown")}</div></div>''',unsafe_allow_html=True)
+            col_med, col_del = st.columns([10,1])
+            with col_med:
+                st.markdown(f'''<div class="med-card {'stale' if stale else ''}"><div class="mname">{m["name"]} {m["dosage"]} &nbsp; {tag}</div><div class="minfo">📅 {m["frequency"]}{" &nbsp;·&nbsp; "+m["instructions"] if m.get("instructions") else ""}</div><div class="msrc">Prescribed {days_ago(m.get("date_prescribed"))} by {m.get("prescribing_doctor","Unknown")} &nbsp;·&nbsp; Source: {m.get("source","Unknown")}</div></div>''',unsafe_allow_html=True)
+            with col_del:
+                if st.button("🗑️", key=f"del_med_{m['id']}", help="Delete this medication"):
+                    db_delete_medication(m["id"]); st.rerun()
         st.markdown("<br>",unsafe_allow_html=True)
         if len(meds)>=2:
             if st.button("🔍 Check for Drug Interactions", type="primary", use_container_width=True):
@@ -390,7 +413,12 @@ elif "Lab Reports" in page:
         for r in labs:
             stale=is_stale(r.get("date"),30)
             tag='<span class="tag-stale">⚠️ STALE</span>' if stale else '<span class="tag-verified">✓ RECENT</span>'
-            st.markdown(f'''<div class="med-card {'stale' if stale else ''}"><div class="mname">{r["test"]}: {r["value"]} {r["unit"]} &nbsp; {tag}</div><div class="minfo">Reference range: {r.get("reference_range","Not specified")}</div><div class="msrc">Date: {r.get("date","?")} &nbsp;·&nbsp; Lab: {r.get("lab","?")}</div></div>''',unsafe_allow_html=True)
+            col_lab, col_del = st.columns([10,1])
+            with col_lab:
+                st.markdown(f'''<div class="med-card {'stale' if stale else ''}"><div class="mname">{r["test"]}: {r["value"]} {r["unit"]} &nbsp; {tag}</div><div class="minfo">Reference range: {r.get("reference_range","Not specified")}</div><div class="msrc">Date: {r.get("date","?")} &nbsp;·&nbsp; Lab: {r.get("lab","?")}</div></div>''',unsafe_allow_html=True)
+            with col_del:
+                if st.button("🗑️", key=f"del_lab_{r['id']}", help="Delete this report"):
+                    db_delete_lab_report(r["id"]); st.rerun()
 
 elif "Caregiver" in page:
     st.markdown(f"### 🗣️ Caregiver Updates for {active_profile['name']}")
@@ -409,7 +437,12 @@ elif "Caregiver" in page:
     if updates:
         for u in updates:
             sym=f" · Symptoms: _{u['symptoms']}_" if u.get("symptoms") else ""
-            st.markdown(f'''<div class="med-card"><div class="mname">Caregiver-A · {days_ago(u.get("date"))}</div><div class="minfo">{u["text"]}</div><div class="msrc">Meds: {'✓' if u.get("medications_taken") else '?'} · Meals: {'✓' if u.get("had_meals") else '?'}{sym} · <em>interpreted</em></div></div>''',unsafe_allow_html=True)
+            col_upd, col_del = st.columns([10,1])
+            with col_upd:
+                st.markdown(f'''<div class="med-card"><div class="mname">Caregiver-A · {days_ago(u.get("date"))}</div><div class="minfo">{u["text"]}</div><div class="msrc">Meds: {'✓' if u.get("medications_taken") else '?'} · Meals: {'✓' if u.get("had_meals") else '?'}{sym} · <em>interpreted</em></div></div>''',unsafe_allow_html=True)
+            with col_del:
+                if st.button("🗑️", key=f"del_upd_{u['id']}", help="Delete this update"):
+                    db_delete_caregiver_update(u["id"]); st.rerun()
 
 elif "Alerts" in page:
     st.markdown(f"### ⚠️ Alerts — {active_profile['name']}")
