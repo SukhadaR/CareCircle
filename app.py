@@ -527,7 +527,11 @@ elif "Medications" in page:
             # Course status for short-duration medications
             _dur = m.get("duration") or ""
             if _dur == "None": _dur = ""
-            course_status = get_course_status(m.get("date_prescribed"), _dur)
+            _date = m.get("date_prescribed") or ""
+            if _date == "None": _date = ""
+            course_status = get_course_status(_date, _dur)
+            if m.get("name","").lower() == "pantoprazole":
+                st.caption(f"DEBUG — date='{_date}' dur='{_dur}' status={course_status}")
             course_tag = ""
             course_warning = ""
             if course_status is not None:
