@@ -137,6 +137,24 @@ def db_delete_caregiver_update(update_id):
     try: sb.table("caregiver_updates").delete().eq("id", update_id).execute()
     except Exception as e: st.error(f"Error: {e}")
 
+def db_save_prescription(pid, prescription):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("prescriptions").insert({**prescription, "profile_id": pid}).execute()
+    except Exception as e: st.error(f"Error saving prescription: {e}")
+
+def db_get_prescriptions(pid):
+    sb = get_supabase()
+    if not sb: return []
+    try: return sb.table("prescriptions").select("*").eq("profile_id", pid).order("created_at", desc=True).execute().data or []
+    except: return []
+
+def db_delete_prescription(prescription_id):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("prescriptions").delete().eq("id", prescription_id).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
 def get_ai_client():
     key = st.session_state.get("api_key", "") or st.secrets.get("ANTHROPIC_API_KEY", "")
     if not key: return None
@@ -256,7 +274,7 @@ with st.sidebar:
         c1.metric("Lab Reports", len(labs)); c2.metric("Updates", len(updates))
         st.markdown("---")
         st.markdown("**Navigation**")
-        page = st.radio("", ["🏠  Daily Briefing","💊  Medications","🔬  Lab Reports","🗣️  Caregiver Updates","⚠️  Alerts","💬  Ask CareCircle"], label_visibility="collapsed")
+        page = st.radio("", ["🏠  Daily Briefing","💊  Medications","📄  Prescriptions","🔬  Lab Reports","🗣️  Caregiver Updates","⚠️  Alerts","💬  Ask CareCircle"], label_visibility="collapsed")
     else:
         meds=alerts=labs=updates=[]; page="🏠  Daily Briefing"
 
@@ -339,11 +357,18 @@ elif "Medications" in page:
                     if not result.get("extraction_possible"): st.error(f"Could not read: {result.get('reason_if_low','Image unclear')}")
                     else:
                         added=0
+                        extracted_names=[]
+                        doctor_name="Unknown"
+                        date_prescribed=None
                         for med in result.get("medications",[]):
                             if med.get("ready_to_add"):
                                 db_add_medication(st.session_state.active_profile_id, {"id":str(uuid.uuid4())[:8],"name":med["medication_name"],"dosage":med["dosage"],"frequency":med["frequency"],"duration":med.get("duration"),"instructions":med.get("instructions"),"prescribing_doctor":med.get("prescribing_doctor","Unknown"),"date_prescribed":med.get("date_prescribed"),"source":uploaded.name,"date_ingested":datetime.now().strftime("%Y-%m-%d"),"verified":True,"confidence":"HIGH"})
+                                extracted_names.append(f"{med['medication_name']} {med['dosage']}")
+                                if med.get("prescribing_doctor"): doctor_name=med["prescribing_doctor"]
+                                if med.get("date_prescribed"): date_prescribed=med["date_prescribed"]
                                 added+=1
                             else: st.session_state.pending_confirmations.append({"medication_name":med.get("medication_name","Unknown"),"fields_to_confirm":med.get("needs_confirmation",[]),"partial_data":med,"source":uploaded.name})
+                        db_save_prescription(st.session_state.active_profile_id, {"id":str(uuid.uuid4())[:8],"filename":uploaded.name,"prescribed_by":doctor_name,"date_prescribed":date_prescribed,"medications_extracted":extracted_names,"notes":result.get("document_notes",""),"date_uploaded":datetime.now().strftime("%Y-%m-%d")})
                         if added: st.success(f"✅ {added} medication(s) added.")
                         if result.get("document_notes"): st.info(f"📋 {result['document_notes']}")
                         st.rerun()
@@ -390,6 +415,35 @@ elif "Medications" in page:
                     sev=ix["severity"]; cls="alert-critical" if sev=="CRITICAL" else "alert-high" if sev=="HIGH" else "alert-low"
                     st.markdown(f'''<div class="{cls}"><strong>{icons.get(sev,"ℹ️")} {sev}: {" + ".join(ix["drugs_involved"])}</strong><br><span style="font-size:14px">{ix["what_happens"]}</span><br><br><strong>What to do:</strong> {ix["what_to_do"]}<br><strong>Urgency:</strong> {ix["urgency"]}</div>''',unsafe_allow_html=True)
             else: st.success(f"✅ {result.get('reassurance','No significant interactions found.')}")
+
+elif "Prescriptions" in page:
+    st.markdown(f"### 📄 {active_profile['name']}'s Prescription History")
+    st.markdown("Every prescription ever uploaded — your complete medication paper trail.")
+
+    prescriptions = db_get_prescriptions(st.session_state.active_profile_id)
+
+    if not prescriptions:
+        st.info("No prescriptions uploaded yet. Go to 💊 Medications to upload one.")
+    else:
+        st.markdown(f"**{len(prescriptions)} prescription(s) on file**")
+        for rx in prescriptions:
+            meds_list = ", ".join(rx.get("medications_extracted") or []) or "None extracted"
+            col_rx, col_del = st.columns([10,1])
+            with col_rx:
+                st.markdown(f"""<div class="med-card">
+                    <div class="mname">📄 {rx.get("filename","Unknown file")}</div>
+                    <div class="minfo">
+                        <strong>Prescribed by:</strong> {rx.get("prescribed_by","Unknown")} &nbsp;·&nbsp;
+                        <strong>Date:</strong> {rx.get("date_prescribed","Not specified")}
+                    </div>
+                    <div class="minfo"><strong>Medications extracted:</strong> {meds_list}</div>
+                    {f'<div class="minfo"><strong>Notes:</strong> {rx["notes"]}</div>' if rx.get("notes") else ""}
+                    <div class="msrc">Uploaded {days_ago(rx.get("date_uploaded"))}</div>
+                </div>""", unsafe_allow_html=True)
+            with col_del:
+                if st.button("🗑️", key=f"del_rx_{rx['id']}", help="Delete this prescription record"):
+                    db_delete_prescription(rx["id"])
+                    st.rerun()
 
 elif "Lab Reports" in page:
     st.markdown(f"### 🔬 {active_profile['name']}'s Lab Reports")
