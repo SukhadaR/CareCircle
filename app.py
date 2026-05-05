@@ -208,13 +208,13 @@ def get_course_end_date(date_prescribed, duration_str):
         start = datetime.strptime(date_prescribed[:10], "%Y-%m-%d").date()
         dl = duration_str.lower()
         days = None
-        if "7 day" in dl or "one week" in dl or "1 week" in dl: days = 7
-        elif "14 day" in dl or "two week" in dl or "2 week" in dl: days = 14
+        if any(x in dl for x in ["7 day","one week","1 week","seven day"]): days = 7
+        elif any(x in dl for x in ["14 day","two week","2 week","fourteen"]): days = 14
         elif "10 day" in dl: days = 10
         elif "5 day" in dl: days = 5
         elif "3 day" in dl: days = 3
-        elif "month" in dl or "30 day" in dl: days = 30
-        elif "ongoing" in dl or "continue" in dl or "long" in dl: return None
+        elif any(x in dl for x in ["month","30 day"]): days = 30
+        elif any(x in dl for x in ["ongoing","continue","long term","indefinite"]): return None
         if days: return start + __import__("datetime").timedelta(days=days)
         return None
     except: return None
@@ -463,10 +463,19 @@ elif "Medications" in page:
                                     if med.get("date_prescribed"): date_prescribed=med["date_prescribed"]
                                 else: st.session_state.pending_confirmations.append({"medication_name":med.get("medication_name","Unknown"),"fields_to_confirm":med.get("needs_confirmation",[]),"partial_data":med,"source":uploaded.name})
                             db_save_prescription(st.session_state.active_profile_id, {"id":str(uuid.uuid4())[:8],"filename":uploaded.name,"prescribed_by":doctor_name,"date_prescribed":date_prescribed,"medications_extracted":extracted_names,"notes":result.get("document_notes",""),"date_uploaded":datetime.now().strftime("%Y-%m-%d")})
-                            if added: st.success(f"✅ {added} new medication(s) added.")
-                            if skipped: st.info(f"ℹ️ {skipped} medication(s) already in profile — skipped.")
-                            if result.get("document_notes"): st.info(f"📋 {result['document_notes']}")
+                            msgs = []
+                            if added: msgs.append(f"✅ {added} new medication(s) added.")
+                            if skipped: msgs.append(f"ℹ️ {skipped} medication(s) skipped — already in profile: {', '.join([n for n in extracted_names if 'already exists' in n])}")
+                            if result.get("document_notes"): msgs.append(f"📋 {result['document_notes']}")
+                            st.session_state["upload_msgs"] = msgs
                             st.rerun()
+    if st.session_state.get("upload_msgs"):
+        for msg in st.session_state["upload_msgs"]:
+            if msg.startswith("✅"): st.success(msg)
+            elif msg.startswith("ℹ️"): st.info(msg)
+            elif msg.startswith("📋"): st.info(msg)
+        st.session_state["upload_msgs"] = []
+
     if st.session_state.pending_confirmations:
         st.markdown("#### ⚠️ Needs Confirmation")
         for i,item in enumerate(st.session_state.pending_confirmations):
