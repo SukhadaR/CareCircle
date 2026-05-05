@@ -56,13 +56,15 @@ def db_get_profiles():
 
 def db_create_profile(name, age, conditions, doctors):
     sb = get_supabase()
-    if not sb: return None
+    if not sb:
+        st.error("❌ Cannot connect to database. Check that SUPABASE_URL and SUPABASE_KEY are set in Streamlit secrets.")
+        return None
     pid = str(uuid.uuid4())[:8]
     try:
         sb.table("profiles").insert({"id": pid, "name": name, "age": age, "conditions": conditions, "doctors": doctors}).execute()
         return pid
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"❌ Database error: {e}")
         return None
 
 def db_get_medications(pid):
