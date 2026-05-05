@@ -525,13 +525,11 @@ elif "Medications" in page:
             stale=is_stale(m.get("date_prescribed"),90)
             tag='<span class="tag-stale">⚠️ POSSIBLY STALE</span>' if stale else '<span class="tag-verified">✓ VERIFIED</span>'
             # Course status for short-duration medications
-            _dur = m.get("duration") or ""
-            if _dur == "None": _dur = ""
-            _date = m.get("date_prescribed") or ""
-            if _date == "None": _date = ""
-            course_status = get_course_status(_date, _dur)
-            if m.get("name","").lower() == "pantoprazole":
-                st.caption(f"DEBUG — date='{_date}' dur='{_dur}' status={course_status}")
+            _dur = str(m.get("duration") or "").strip()
+            if _dur in ("None","none","null",""): _dur = ""
+            _date = str(m.get("date_prescribed") or "").strip()
+            if _date in ("None","none","null",""): _date = ""
+            course_status = get_course_status(_date, _dur) if _date and _dur else None
             course_tag = ""
             course_warning = ""
             if course_status is not None:
