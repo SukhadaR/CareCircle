@@ -177,6 +177,63 @@ def db_check_duplicate_medication(pid, name, dosage):
         return len(result) > 0
     except: return False
 
+def db_get_appointments(pid):
+    sb = get_supabase()
+    if not sb: return []
+    try: return sb.table("appointments").select("*").eq("profile_id", pid).order("appointment_date").execute().data or []
+    except: return []
+
+def db_add_appointment(pid, appt):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("appointments").insert({**appt, "profile_id": pid}).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def db_update_appointment(appt_id, updates):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("appointments").update(updates).eq("id", appt_id).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def db_delete_appointment(appt_id):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("appointments").delete().eq("id", appt_id).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def get_course_end_date(date_prescribed, duration_str):
+    """Parse duration string and return end date."""
+    if not date_prescribed or not duration_str: return None
+    try:
+        start = datetime.strptime(date_prescribed[:10], "%Y-%m-%d").date()
+        dl = duration_str.lower()
+        days = None
+        if "7 day" in dl or "one week" in dl or "1 week" in dl: days = 7
+        elif "14 day" in dl or "two week" in dl or "2 week" in dl: days = 14
+        elif "10 day" in dl: days = 10
+        elif "5 day" in dl: days = 5
+        elif "3 day" in dl: days = 3
+        elif "month" in dl or "30 day" in dl: days = 30
+        elif "ongoing" in dl or "continue" in dl or "long" in dl: return None
+        if days: return start + __import__("datetime").timedelta(days=days)
+        return None
+    except: return None
+
+def get_course_status(date_prescribed, duration_str):
+    """Returns: None (ongoing), days_left (int, still active), or days_overdue (negative int)."""
+    end = get_course_end_date(date_prescribed, duration_str)
+    if not end: return None
+    today = date.today()
+    diff = (end - today).days
+    return diff
+
+def days_until(date_str):
+    if not date_str: return None
+    try:
+        d = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+        return (d - date.today()).days
+    except: return None
+
 def get_ai_client():
     key = st.session_state.get("api_key", "") or st.secrets.get("ANTHROPIC_API_KEY", "")
     if not key: return None
@@ -296,7 +353,7 @@ with st.sidebar:
         c1.metric("Lab Reports", len(labs)); c2.metric("Updates", len(updates))
         st.markdown("---")
         st.markdown("**Navigation**")
-        page = st.radio("", ["🏠  Daily Briefing","💊  Medications","📄  Prescriptions","🔬  Lab Reports","🗣️  Caregiver Updates","⚠️  Alerts","💬  Ask CareCircle"], label_visibility="collapsed")
+        page = st.radio("", ["🏠  Daily Briefing","💊  Medications","📄  Prescriptions","🔬  Lab Reports","🗣️  Caregiver Updates","📅  Appointments","⚠️  Alerts","💬  Ask CareCircle"], label_visibility="collapsed")
     else:
         meds=alerts=labs=updates=[]; page="🏠  Daily Briefing"
 
@@ -432,9 +489,31 @@ elif "Medications" in page:
         for m in meds:
             stale=is_stale(m.get("date_prescribed"),90)
             tag='<span class="tag-stale">⚠️ POSSIBLY STALE</span>' if stale else '<span class="tag-verified">✓ VERIFIED</span>'
+            # Course status for short-duration medications
+            course_status = get_course_status(m.get("date_prescribed"), m.get("duration",""))
+            course_tag = ""
+            course_warning = ""
+            if course_status is not None:
+                if course_status > 3:
+                    course_tag = f'<span style="background:#e8f5e9;color:#2e7d32;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">⏱️ {course_status} days left</span>'
+                elif course_status > 0:
+                    course_tag = f'<span style="background:#fff3e0;color:#e65100;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">⚠️ {course_status} day(s) left</span>'
+                elif course_status == 0:
+                    course_tag = '<span style="background:#ffebee;color:#c62828;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">🔴 Course ends TODAY</span>'
+                    course_warning = "Course ends today — unless the doctor has extended it, this medication should stop."
+                else:
+                    course_tag = f'<span style="background:#ffebee;color:#c62828;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">🔴 Course ended {abs(course_status)} day(s) ago</span>'
+                    course_warning = f"This was a {m.get('duration','short')} course — it ended {abs(course_status)} day(s) ago. Verify with the doctor before continuing."
+
             col_med, col_del = st.columns([10,1])
             with col_med:
-                st.markdown(f'''<div class="med-card {'stale' if stale else ''}"><div class="mname">{m["name"]} {m["dosage"]} &nbsp; {tag}</div><div class="minfo">📅 {m["frequency"]}{" &nbsp;·&nbsp; "+m["instructions"] if m.get("instructions") else ""}</div><div class="msrc">Prescribed {days_ago(m.get("date_prescribed"))} by {m.get("prescribing_doctor","Unknown")} &nbsp;·&nbsp; Source: {m.get("source","Unknown")}</div></div>''',unsafe_allow_html=True)
+                st.markdown(f'''<div class="med-card {'stale' if stale else ''}">
+                    <div class="mname">{m["name"]} {m["dosage"]} &nbsp; {tag} &nbsp; {course_tag}</div>
+                    <div class="minfo">📅 {m["frequency"]}{" &nbsp;·&nbsp; "+m["instructions"] if m.get("instructions") else ""}{" &nbsp;·&nbsp; Duration: "+m["duration"] if m.get("duration") else ""}</div>
+                    <div class="msrc">Prescribed {days_ago(m.get("date_prescribed"))} by {m.get("prescribing_doctor","Unknown")} &nbsp;·&nbsp; Source: {m.get("source","Unknown")}</div>
+                </div>''',unsafe_allow_html=True)
+                if course_warning:
+                    st.warning(f"⚠️ {m['name']}: {course_warning}")
             with col_del:
                 if st.button("🗑️", key=f"del_med_{m['id']}", help="Delete this medication"):
                     db_delete_medication(m["id"]); st.rerun()
@@ -531,6 +610,102 @@ elif "Caregiver" in page:
             with col_del:
                 if st.button("🗑️", key=f"del_upd_{u['id']}", help="Delete this update"):
                     db_delete_caregiver_update(u["id"]); st.rerun()
+
+elif "Appointments" in page:
+    st.markdown(f"### 📅 {active_profile['name']}'s Appointments")
+    st.markdown("Track upcoming visits, pre-appointment checklists, and what the doctor said.")
+
+    with st.expander("➕ Add an appointment", expanded=True):
+        c1,c2 = st.columns(2)
+        with c1:
+            appt_doctor = st.selectbox("Doctor", [d["role"] for d in active_profile.get("doctors",[])] + ["Other"])
+            appt_hospital = st.text_input("Hospital", placeholder="Fortis Hospital")
+            appt_date = st.date_input("Appointment date", value=date.today())
+        with c2:
+            appt_reason = st.text_input("Reason", placeholder="Routine cardiology follow-up")
+            st.markdown("**Pre-appointment checklist:**")
+            need_blood_test = st.checkbox("Blood test needed before visit")
+            need_reports = st.checkbox("Collect recent reports")
+            need_caregiver = st.checkbox("Caregiver to accompany")
+        if st.button("➕ Add Appointment", type="primary", use_container_width=True):
+            if appt_date:
+                db_add_appointment(st.session_state.active_profile_id, {
+                    "id": str(uuid.uuid4())[:8],
+                    "doctor_role": appt_doctor,
+                    "hospital": appt_hospital,
+                    "appointment_date": str(appt_date),
+                    "reason": appt_reason,
+                    "pre_checklist": {"blood_test": need_blood_test, "reports": need_reports, "caregiver": need_caregiver},
+                    "post_notes": "",
+                    "status": "upcoming"
+                })
+                st.success(f"✅ Appointment added for {str(appt_date)}")
+                st.rerun()
+
+    appointments = db_get_appointments(st.session_state.active_profile_id)
+    if not appointments:
+        st.info("No appointments scheduled yet.")
+    else:
+        upcoming = [a for a in appointments if a.get("status") != "done"]
+        past     = [a for a in appointments if a.get("status") == "done"]
+
+        if upcoming:
+            st.markdown(f"#### Upcoming ({len(upcoming)})")
+            for a in upcoming:
+                du = days_until(a.get("appointment_date"))
+                if du is None: du_text = ""
+                elif du < 0:   du_text = f'<span style="background:#ffebee;color:#c62828;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">OVERDUE by {abs(du)} day(s)</span>'
+                elif du == 0:  du_text = '<span style="background:#ffebee;color:#c62828;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">TODAY</span>'
+                elif du <= 3:  du_text = f'<span style="background:#fff3e0;color:#e65100;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">In {du} day(s)</span>'
+                elif du <= 7:  du_text = f'<span style="background:#fff8e1;color:#f57f17;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">In {du} days</span>'
+                else:          du_text = f'<span style="background:#e8f5e9;color:#2e7d32;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">In {du} days</span>'
+
+                checklist = a.get("pre_checklist") or {}
+                checklist_items = []
+                if checklist.get("blood_test"): checklist_items.append("🩸 Blood test needed")
+                if checklist.get("reports"):    checklist_items.append("📋 Collect reports")
+                if checklist.get("caregiver"):  checklist_items.append("👤 Caregiver to accompany")
+                checklist_str = " &nbsp;·&nbsp; ".join(checklist_items) if checklist_items else "No pre-checklist items"
+
+                col_a, col_done, col_del = st.columns([8,1.5,0.5])
+                with col_a:
+                    st.markdown(f"""<div class="med-card">
+                        <div class="mname">{a.get("doctor_role","Doctor")} &nbsp; {du_text}</div>
+                        <div class="minfo">📅 {a.get("appointment_date","")} &nbsp;·&nbsp; {a.get("hospital","")}</div>
+                        <div class="minfo">Reason: {a.get("reason","Not specified")}</div>
+                        <div class="msrc">{checklist_str}</div>
+                    </div>""", unsafe_allow_html=True)
+                    # Gap warnings
+                    if du is not None and du <= 7 and checklist.get("blood_test"):
+                        st.warning(f"⚠️ Blood test needed before this appointment in {du} day(s) — has it been scheduled?")
+                with col_done:
+                    if st.button("✅ Done", key=f"done_{a['id']}"):
+                        db_update_appointment(a["id"], {"status": "done"})
+                        st.rerun()
+                with col_del:
+                    if st.button("🗑️", key=f"del_a_{a['id']}"):
+                        db_delete_appointment(a["id"]); st.rerun()
+
+                # Post-appointment notes
+                with st.expander(f"📝 Add doctor's notes for this visit", expanded=False):
+                    post = st.text_area("What did the doctor say?", value=a.get("post_notes",""), key=f"post_{a['id']}", placeholder="Doctor changed Amlodipine to 10mg. Wants blood sugar below 140 by next visit...")
+                    if st.button("Save notes", key=f"save_post_{a['id']}"):
+                        db_update_appointment(a["id"], {"post_notes": post, "status": "done"})
+                        st.success("Notes saved."); st.rerun()
+
+        if past:
+            st.markdown(f"#### Past Appointments ({len(past)})")
+            for a in past:
+                col_a, col_del = st.columns([10,1])
+                with col_a:
+                    st.markdown(f"""<div class="med-card" style="opacity:0.7">
+                        <div class="mname">✅ {a.get("doctor_role","Doctor")} — {a.get("appointment_date","")}</div>
+                        <div class="minfo">Reason: {a.get("reason","")}</div>
+                        {f'<div class="minfo">📝 {a["post_notes"]}</div>' if a.get("post_notes") else ""}
+                    </div>""", unsafe_allow_html=True)
+                with col_del:
+                    if st.button("🗑️", key=f"del_pa_{a['id']}"):
+                        db_delete_appointment(a["id"]); st.rerun()
 
 elif "Alerts" in page:
     st.markdown(f"### ⚠️ Alerts — {active_profile['name']}")
