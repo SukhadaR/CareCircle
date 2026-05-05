@@ -115,7 +115,7 @@ if "crisis_mode" not in st.session_state:
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 def get_client():
-    key = st.session_state.get("api_key", "") or st.secrets.get("ANTHROPIC_API_KEY", "")
+    key = st.session_state.get("api_key", "")
     if not key:
         return None
     return anthropic.Anthropic(api_key=key)
@@ -625,11 +625,27 @@ elif "Medications" in page:
                 with st.spinner("Checking interactions..."):
                     result = run_interaction_check()
                 if result:
-                    if result["interactions_found"]:
-                        st.warning(f"⚠️ {result['summary']}")
-                    else:
-                        st.success(f"✅ {result.get('reassurance', 'No significant interactions found.')}")
-                    st.rerun()
+                    st.session_state["interaction_result"] = result
+
+        if st.session_state.get("interaction_result"):
+            result = st.session_state["interaction_result"]
+            severity_icons = {"CRITICAL": "🚨", "HIGH": "⚠️", "MEDIUM": "📋", "LOW": "ℹ️", "NONE": "✅"}
+            st.markdown("---")
+            st.markdown("#### 🔍 Drug Interaction Results")
+            if result["interactions_found"]:
+                for interaction in result.get("interactions", []):
+                    sev = interaction["severity"]
+                    cls = "alert-critical" if sev == "CRITICAL" else "alert-high" if sev == "HIGH" else "alert-low"
+                    sicon = severity_icons.get(sev, "ℹ️")
+                    drugs = " + ".join(interaction["drugs_involved"])
+                    st.markdown(f"""<div class="{cls}">
+                        <strong>{sicon} {sev}: {drugs}</strong><br>
+                        <span style="font-size:14px">{interaction['what_happens']}</span><br><br>
+                        <strong>What to do:</strong> {interaction['what_to_do']}<br>
+                        <strong>Urgency:</strong> {interaction['urgency']}
+                    </div>""", unsafe_allow_html=True)
+            else:
+                st.success(f"✅ {result.get('reassurance', 'No significant interactions found.')}")
 
 
 # ── PAGE: LAB REPORTS ─────────────────────────────────────────────────────────
