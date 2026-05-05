@@ -1,8 +1,6 @@
 """
-CareCircle — Streamlit App
-===========================
-A care coordination agent for Meera.
-Upload prescriptions, check interactions, get a daily briefing.
+CareCircle — Streamlit App with Supabase Persistence
+Multi-profile support. Data persists across sessions.
 """
 
 import streamlit as st
@@ -11,805 +9,434 @@ import base64
 import json
 import uuid
 from datetime import datetime, date
-from pathlib import Path
+from supabase import create_client
 
-# ── PAGE CONFIG ───────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="CareCircle",
-    page_icon="🔵",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="CareCircle", page_icon="🔵", layout="wide", initial_sidebar_state="expanded")
 
-# ── STYLES ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .main { background-color: #f8f9fa; }
-    .stApp { font-family: 'Inter', sans-serif; }
-
-    .cc-header {
-        background: linear-gradient(135deg, #1E3A5F 0%, #2E75B6 100%);
-        padding: 24px 28px; border-radius: 12px;
-        margin-bottom: 24px; color: white;
-    }
+    .cc-header { background: linear-gradient(135deg, #1E3A5F 0%, #2E75B6 100%); padding: 24px 28px; border-radius: 12px; margin-bottom: 24px; color: white; }
     .cc-header h1 { margin: 0; font-size: 28px; font-weight: 700; }
     .cc-header p  { margin: 4px 0 0; font-size: 14px; opacity: 0.85; }
-
-    .metric-card {
-        background: white; border-radius: 10px;
-        padding: 18px 20px; border: 1px solid #e0e0e0;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-    }
-    .metric-card .label { font-size: 12px; color: #888; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .metric-card { background: white; border-radius: 10px; padding: 18px 20px; border: 1px solid #e0e0e0; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+    .metric-card .label { font-size: 12px; color: #888; font-weight: 600; text-transform: uppercase; }
     .metric-card .value { font-size: 28px; font-weight: 700; color: #1E3A5F; margin-top: 4px; }
     .metric-card .sub   { font-size: 12px; color: #aaa; margin-top: 2px; }
-
-    .med-card {
-        background: white; border-radius: 10px;
-        padding: 16px 18px; border: 1px solid #e0e0e0;
-        margin-bottom: 10px; border-left: 4px solid #2E75B6;
-    }
-    .med-card.stale  { border-left-color: #FFA500; }
+    .med-card { background: white; border-radius: 10px; padding: 16px 18px; border: 1px solid #e0e0e0; margin-bottom: 10px; border-left: 4px solid #2E75B6; }
+    .med-card.stale { border-left-color: #FFA500; }
     .med-card .mname { font-size: 16px; font-weight: 700; color: #1E3A5F; }
     .med-card .minfo { font-size: 13px; color: #555; margin-top: 4px; }
     .med-card .msrc  { font-size: 11px; color: #aaa; margin-top: 6px; }
-
     .alert-critical { background:#fff0f0; border:1px solid #ffcccc; border-left:4px solid #cc0000; border-radius:10px; padding:16px 18px; margin-bottom:10px; }
     .alert-high     { background:#fff8f0; border:1px solid #ffd9b3; border-left:4px solid #FF6600; border-radius:10px; padding:16px 18px; margin-bottom:10px; }
     .alert-low      { background:#f0f8ff; border:1px solid #cce0ff; border-left:4px solid #2E75B6; border-radius:10px; padding:16px 18px; margin-bottom:10px; }
-
-    .briefing-box {
-        background: white; border-radius: 12px;
-        padding: 24px; border: 1px solid #e0e0e0;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-        font-size: 15px; line-height: 1.7; color: #333;
-    }
-
-    .crisis-card {
-        background: #fff0f0; border: 2px solid #cc0000;
-        border-radius: 12px; padding: 20px;
-    }
+    .briefing-box { background: white; border-radius: 12px; padding: 24px; border: 1px solid #e0e0e0; font-size: 15px; line-height: 1.7; color: #333; }
+    .crisis-card { background: #fff0f0; border: 2px solid #cc0000; border-radius: 12px; padding: 20px; }
     .crisis-card h3 { color: #cc0000; margin-top: 0; }
-
-    .confirm-card {
-        background: #fffbf0; border: 1px solid #ffd980;
-        border-left: 4px solid #FFA500; border-radius: 10px;
-        padding: 16px 18px; margin-bottom: 10px;
-    }
-
+    .confirm-card { background: #fffbf0; border: 1px solid #ffd980; border-left: 4px solid #FFA500; border-radius: 10px; padding: 16px 18px; margin-bottom: 10px; }
     .tag-verified { background:#e8f5e9; color:#2e7d32; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:600; }
     .tag-stale    { background:#fff3e0; color:#e65100; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:600; }
-    .tag-high     { background:#ffebee; color:#c62828; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:600; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── SESSION STATE ─────────────────────────────────────────────────────────────
-if "profile" not in st.session_state:
-    st.session_state.profile = {
-        "patient": {
-            "id": "dad_001",
-            "display_name": "Dad",
-            "age": 67,
-            "conditions": ["Type 2 Diabetes", "Hypertension", "Post-cardiac episode"],
-            "doctors": [
-                {"role": "Cardiologist", "hospital": "Fortis Hospital"},
-                {"role": "Endocrinologist", "hospital": "Apollo Hospital"},
-                {"role": "General Physician", "hospital": "City Clinic"}
-            ]
-        },
-        "medications": [],
-        "lab_reports": [],
-        "caregiver_updates": [],
-        "alerts": []
-    }
-
-if "pending_confirmations" not in st.session_state:
-    st.session_state.pending_confirmations = []
-
-if "briefing" not in st.session_state:
-    st.session_state.briefing = None
-
-if "crisis_mode" not in st.session_state:
-    st.session_state.crisis_mode = False
-
-
-# ── HELPERS ───────────────────────────────────────────────────────────────────
-def get_client():
-    key = st.session_state.get("api_key", "") or st.secrets.get("ANTHROPIC_API_KEY", "")
-    if not key:
+@st.cache_resource
+def get_supabase():
+    url = st.secrets.get("SUPABASE_URL", "")
+    key = st.secrets.get("SUPABASE_KEY", "")
+    if not url or not key:
         return None
+    return create_client(url, key)
+
+def db_get_profiles():
+    sb = get_supabase()
+    if not sb: return []
+    try: return sb.table("profiles").select("*").order("created_at").execute().data or []
+    except: return []
+
+def db_create_profile(name, age, conditions, doctors):
+    sb = get_supabase()
+    if not sb: return None
+    pid = str(uuid.uuid4())[:8]
+    try:
+        sb.table("profiles").insert({"id": pid, "name": name, "age": age, "conditions": conditions, "doctors": doctors}).execute()
+        return pid
+    except Exception as e:
+        st.error(f"Error: {e}")
+        return None
+
+def db_get_medications(pid):
+    sb = get_supabase()
+    if not sb: return []
+    try: return sb.table("medications").select("*").eq("profile_id", pid).order("created_at").execute().data or []
+    except: return []
+
+def db_add_medication(pid, med):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("medications").insert({**med, "profile_id": pid}).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def db_get_lab_reports(pid):
+    sb = get_supabase()
+    if not sb: return []
+    try: return sb.table("lab_reports").select("*").eq("profile_id", pid).order("date", desc=True).execute().data or []
+    except: return []
+
+def db_add_lab_report(pid, r):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("lab_reports").insert({**r, "profile_id": pid}).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def db_get_caregiver_updates(pid):
+    sb = get_supabase()
+    if not sb: return []
+    try: return sb.table("caregiver_updates").select("*").eq("profile_id", pid).order("date", desc=True).execute().data or []
+    except: return []
+
+def db_add_caregiver_update(pid, u):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("caregiver_updates").insert({**u, "profile_id": pid}).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def db_get_alerts(pid):
+    sb = get_supabase()
+    if not sb: return []
+    try: return sb.table("alerts").select("*").eq("profile_id", pid).order("created_at", desc=True).execute().data or []
+    except: return []
+
+def db_save_alerts(pid, interactions):
+    sb = get_supabase()
+    if not sb: return
+    try:
+        sb.table("alerts").delete().eq("profile_id", pid).eq("type", "drug_interaction").execute()
+        for i in interactions:
+            sb.table("alerts").insert({"profile_id": pid, "type": "drug_interaction", "severity": i["severity"],
+                "drugs": i["drugs_involved"], "summary": i["what_happens"], "action": i["what_to_do"], "urgency": i["urgency"]}).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def get_ai_client():
+    key = st.session_state.get("api_key", "") or st.secrets.get("ANTHROPIC_API_KEY", "")
+    if not key: return None
     return anthropic.Anthropic(api_key=key)
 
 def is_stale(date_str, threshold_days):
-    if not date_str:
-        return True
+    if not date_str: return True
     try:
-        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+        d = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
         return (date.today() - d).days > threshold_days
-    except:
-        return False
+    except: return False
 
 def days_ago(date_str):
-    if not date_str:
-        return "unknown date"
+    if not date_str: return "unknown date"
     try:
-        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+        d = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
         diff = (date.today() - d).days
         if diff == 0: return "today"
         if diff == 1: return "yesterday"
         return f"{diff} days ago"
-    except:
-        return date_str
+    except: return date_str
 
-def save_profile():
-    pass  # In-memory for demo; in production this writes to disk
+def parse_json_response(text):
+    raw = text.strip()
+    if "```" in raw:
+        raw = raw.split("```")[1]
+        if raw.startswith("json"): raw = raw[4:]
+    return json.loads(raw.strip())
 
-
-# ── PROMPTS ───────────────────────────────────────────────────────────────────
-EXTRACTION_PROMPT = """You are a medical data extraction assistant for CareCircle.
-
-Extract ALL medications from this prescription image. For each medication extract:
-- medication_name, dosage, frequency, duration, prescribing_doctor, date_prescribed, instructions
-
-For each field provide confidence: HIGH (clearly readable), MEDIUM (some uncertainty), LOW (unclear/guessed).
-
-CRITICAL RULES:
-- If medication name is not clearly readable — do NOT guess. Flag it.
-- A medication is ready_to_add ONLY if name + dosage + frequency are ALL HIGH confidence.
-- Never invent information not visible in the image.
-
-Return valid JSON only:
-{
-  "extraction_possible": true,
-  "overall_confidence": "HIGH",
-  "reason_if_low": "",
-  "medications": [
-    {
-      "medication_name": "",
-      "medication_name_confidence": "HIGH",
-      "medication_name_alternatives": [],
-      "dosage": "",
-      "dosage_confidence": "HIGH",
-      "frequency": "",
-      "frequency_confidence": "HIGH",
-      "duration": "",
-      "prescribing_doctor": "",
-      "date_prescribed": "",
-      "instructions": "",
-      "ready_to_add": true,
-      "needs_confirmation": []
-    }
-  ],
-  "document_notes": ""
-}"""
-
-INTERACTION_PROMPT = """You are a clinical pharmacology assistant for CareCircle.
-
-Patient conditions: {conditions}
-
-Medications:
-{medications}
-
-Check for drug-drug and drug-condition interactions.
-
-RULES:
-- Never diagnose. Never recommend changing medications. Always say "discuss with the doctor".
-- Plain English only — Meera is not a pharmacist.
-- If no interactions: say so clearly and reassuringly.
-
-Return valid JSON only:
-{{
-  "interactions_found": false,
-  "overall_risk": "NONE",
-  "summary": "",
-  "interactions": [
-    {{
-      "severity": "CRITICAL",
-      "drugs_involved": [],
-      "what_happens": "",
-      "what_to_do": "",
-      "urgency": ""
-    }}
-  ],
-  "reassurance": ""
-}}"""
-
-BRIEFING_PROMPT = """You are CareCircle, a care coordination assistant for Meera.
-
-Meera is a 31-year-old product manager in Bangalore managing her 67-year-old father's health from a distance.
-She checks this at 7 AM before work or 10 PM when exhausted. She needs to know three things:
-1. Is Dad okay?
-2. Is anything urgent?
-3. What do I need to do?
-
-Here is Dad's current health profile:
-{profile}
-
-Write a warm, plain-English daily briefing. Maximum 200 words.
-
-RULES:
-- Never diagnose. Use plain language.
-- If data is stale (prescriptions >90 days old, labs >30 days), say so.
-- Be honest about what you don't know.
-- End with one clear action item if there is one.
-- Tone: caring, calm, direct. Like a trusted friend who happens to know medicine."""
-
-CRISIS_PROMPT = """You are CareCircle in CRISIS MODE.
-
-Meera needs information in the next 60 seconds. Dad may be having a medical emergency.
-
-Dad's profile:
-{profile}
-
-Generate a structured crisis card with:
-1. Current medications (name + dosage only — no extra text)
-2. Last cardiac report summary (one sentence)
-3. Nearest hospital from profile
-4. Emergency contacts
-
-Keep it extremely brief. This is not a time for prose. Headers and bullet points only.
-No diagnostic language. No speculation."""
-
-
-# ── CORE FUNCTIONS ────────────────────────────────────────────────────────────
 def ingest_prescription(image_bytes, filename):
-    client = get_client()
-    if not client:
-        return None, "No API key set"
-
-    b64 = base64.standard_b64encode(image_bytes).decode()
+    client = get_ai_client()
+    if not client: return None, "No API key"
     ext = filename.split(".")[-1].lower()
-    media_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
-    media_type = media_map.get(ext, "image/jpeg")
+    media_map = {"jpg":"image/jpeg","jpeg":"image/jpeg","png":"image/png","webp":"image/webp"}
+    b64 = base64.standard_b64encode(image_bytes).decode()
+    PROMPT = """Extract ALL medications from this prescription. For each: medication_name, dosage, frequency, duration, prescribing_doctor, date_prescribed, instructions. Confidence per field: HIGH/MEDIUM/LOW. ready_to_add=true only if name+dosage+frequency all HIGH. Return JSON only:
+{"extraction_possible":true,"overall_confidence":"HIGH","reason_if_low":"","medications":[{"medication_name":"","medication_name_confidence":"HIGH","medication_name_alternatives":[],"dosage":"","dosage_confidence":"HIGH","frequency":"","frequency_confidence":"HIGH","duration":"","prescribing_doctor":"","date_prescribed":"","instructions":"","ready_to_add":true,"needs_confirmation":[]}],"document_notes":""}"""
+    response = client.messages.create(model="claude-opus-4-5", max_tokens=1500,
+        messages=[{"role":"user","content":[
+            {"type":"image","source":{"type":"base64","media_type":media_map.get(ext,"image/jpeg"),"data":b64}},
+            {"type":"text","text":PROMPT}]}])
+    return parse_json_response(response.content[0].text), None
 
-    response = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=1500,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
-                {"type": "text", "text": EXTRACTION_PROMPT}
-            ]
-        }]
-    )
-
-    raw = response.content[0].text.strip()
-    if "```" in raw:
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return json.loads(raw.strip()), None
-
-
-def run_interaction_check():
-    client = get_client()
-    if not client:
-        return None
-
-    meds = st.session_state.profile["medications"]
-    if len(meds) < 2:
-        return None
-
-    med_list = "\n".join([
-        f"- {m['name']} {m['dosage']}, {m['frequency']}"
-        + (f" ({m['instructions']})" if m.get("instructions") else "")
-        for m in meds
-    ])
-    conditions = ", ".join(st.session_state.profile["patient"]["conditions"])
-
-    prompt = INTERACTION_PROMPT.format(conditions=conditions, medications=med_list)
-
-    response = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    raw = response.content[0].text.strip()
-    if "```" in raw:
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    result = json.loads(raw.strip())
-
-    # Save alerts
-    st.session_state.profile["alerts"] = []
-    for i in result.get("interactions", []):
-        st.session_state.profile["alerts"].append({
-            "type": "drug_interaction",
-            "severity": i["severity"],
-            "drugs": i["drugs_involved"],
-            "summary": i["what_happens"],
-            "action": i["what_to_do"],
-            "urgency": i["urgency"]
-        })
+def run_interaction_check(pid, meds, conditions):
+    client = get_ai_client()
+    if not client or len(meds) < 2: return None
+    med_list = "\n".join([f"- {m['name']} {m['dosage']}, {m['frequency']}" + (f" ({m['instructions']})" if m.get("instructions") else "") for m in meds])
+    PROMPT = f"""Patient conditions: {", ".join(conditions)}\nMedications:\n{med_list}\nCheck interactions. Never diagnose. Plain English. JSON only:
+{{"interactions_found":false,"overall_risk":"NONE","summary":"","interactions":[{{"severity":"LOW","drugs_involved":[],"what_happens":"","what_to_do":"","urgency":""}}],"reassurance":""}}"""
+    response = client.messages.create(model="claude-opus-4-5", max_tokens=1500, messages=[{"role":"user","content":PROMPT}])
+    result = parse_json_response(response.content[0].text)
+    db_save_alerts(pid, result.get("interactions",[]) if result["interactions_found"] else [])
     return result
 
-
-def generate_briefing():
-    client = get_client()
-    if not client:
-        return "Please set your API key in the sidebar."
-
-    profile_summary = json.dumps(st.session_state.profile, indent=2)
-    prompt = BRIEFING_PROMPT.format(profile=profile_summary)
-
-    response = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=400,
-        messages=[{"role": "user", "content": prompt}]
-    )
+def generate_briefing(profile, meds, labs, updates, alerts):
+    client = get_ai_client()
+    if not client: return "Please set your API key in the sidebar."
+    summary = json.dumps({"medications":meds,"lab_reports":labs[-3:],"caregiver_updates":updates[:3],"alerts":alerts},indent=2)
+    PROMPT = f"""You are CareCircle helping manage {profile["name"]}, {profile["age"]}y, conditions: {", ".join(profile.get("conditions",[]))}.
+Data: {summary}
+Write a warm plain-English daily briefing (max 200 words). Answer: Is {profile["name"]} okay? Anything urgent? One action item?
+Never diagnose. Flag stale data. Tone: caring, calm, direct."""
+    response = client.messages.create(model="claude-opus-4-5", max_tokens=400, messages=[{"role":"user","content":PROMPT}])
     return response.content[0].text.strip()
 
-
-def generate_crisis_card():
-    client = get_client()
-    if not client:
-        return "Please set your API key."
-
-    profile_summary = json.dumps(st.session_state.profile, indent=2)
-    prompt = CRISIS_PROMPT.format(profile=profile_summary)
-
-    response = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=400,
-        messages=[{"role": "user", "content": prompt}]
-    )
+def generate_crisis_card(profile, meds):
+    client = get_ai_client()
+    if not client: return "Please set your API key."
+    med_list = "\n".join([f"- {m['name']} {m['dosage']}" for m in meds]) or "No medications on file"
+    doctors = ", ".join([f"{d['role']} at {d['hospital']}" for d in profile.get("doctors",[])]) or "None on file"
+    PROMPT = f"""CRISIS MODE. Patient: {profile["name"]}, {profile["age"]}y. Conditions: {", ".join(profile.get("conditions",[]))}.
+Medications:\n{med_list}\nDoctors: {doctors}
+Generate crisis card with: CURRENT MEDICATIONS, NEAREST HOSPITAL, EMERGENCY CONTACTS. Ultra brief. No prose."""
+    response = client.messages.create(model="claude-opus-4-5", max_tokens=400, messages=[{"role":"user","content":PROMPT}])
     return response.content[0].text.strip()
 
-
-def detect_crisis(query: str) -> bool:
-    crisis_keywords = [
-        "chest pain", "chest ache", "heart attack", "not breathing",
-        "unconscious", "fainted", "collapsed", "stroke", "emergency",
-        "ambulance", "hospital now", "fell down", "not responding",
-        "can't breathe", "cannot breathe"
-    ]
-    q = query.lower()
-    return any(k in q for k in crisis_keywords)
-
-
-def answer_query(query: str):
-    client = get_client()
-    if not client:
-        return "Please set your API key."
-
-    profile_summary = json.dumps(st.session_state.profile, indent=2)
-
-    system = """You are CareCircle, a care coordination assistant.
-RULES:
-- Never diagnose or recommend medication changes.
-- Always cite source and date of information.
-- Flag if data is stale or missing.
-- If uncertain, say so explicitly.
-- Plain English only. Meera is not a clinician.
-- Keep answers under 150 words."""
-
-    response = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=400,
-        system=system,
-        messages=[{
-            "role": "user",
-            "content": f"Dad's profile:\n{profile_summary}\n\nMeera's question: {query}"
-        }]
-    )
+def answer_query(query, profile, meds, labs, updates):
+    client = get_ai_client()
+    if not client: return "Please set your API key."
+    summary = json.dumps({"patient":profile,"medications":meds,"lab_reports":labs,"caregiver_updates":updates[:5]},indent=2)
+    response = client.messages.create(model="claude-opus-4-5", max_tokens=400,
+        system="You are CareCircle. Never diagnose. Always cite source and date. Flag stale/missing data. Plain English. Under 150 words.",
+        messages=[{"role":"user","content":f"Profile:\n{summary}\n\nQuestion: {query}"}])
     return response.content[0].text.strip()
 
+def detect_crisis(q):
+    return any(k in q.lower() for k in ["chest pain","heart attack","not breathing","unconscious","fainted","collapsed","stroke","emergency","ambulance","fell down","not responding"])
 
-# ── SIDEBAR ───────────────────────────────────────────────────────────────────
+for key in ["active_profile_id","pending_confirmations","briefing","crisis_mode","interaction_result","show_new_profile"]:
+    if key not in st.session_state:
+        st.session_state[key] = None if key in ["active_profile_id","briefing","interaction_result"] else (False if key in ["crisis_mode","show_new_profile"] else [])
+
 with st.sidebar:
     st.markdown("### 🔵 CareCircle")
     st.markdown("---")
-
-    api_key = st.text_input("Anthropic API Key", type="password", placeholder="sk-ant-...")
+    api_key = st.text_input("Anthropic API Key", type="password", placeholder="sk-ant-... (optional)")
     if api_key:
         st.session_state.api_key = api_key
         st.success("API key set ✓")
-
     st.markdown("---")
-    st.markdown("**Dad's Profile**")
-    p = st.session_state.profile["patient"]
-    st.markdown(f"👤 {p['display_name']}, {p['age']} years")
-    for c in p["conditions"]:
-        st.markdown(f"  · {c}")
-
-    st.markdown("---")
-    meds = st.session_state.profile["medications"]
-    labs = st.session_state.profile["lab_reports"]
-    alerts = st.session_state.profile["alerts"]
-    updates = st.session_state.profile["caregiver_updates"]
-
-    col1, col2 = st.columns(2)
-    col1.metric("Medications", len(meds))
-    col2.metric("Alerts", len(alerts))
-    col1.metric("Lab Reports", len(labs))
-    col2.metric("Updates", len(updates))
-
-    st.markdown("---")
-    st.markdown("**Navigation**")
-    page = st.radio("", [
-        "🏠  Daily Briefing",
-        "💊  Medications",
-        "🔬  Lab Reports",
-        "🗣️  Caregiver Updates",
-        "⚠️  Alerts",
-        "💬  Ask CareCircle",
-    ], label_visibility="collapsed")
-
-
-# ── HEADER ────────────────────────────────────────────────────────────────────
-critical_count = sum(1 for a in alerts if a.get("severity") == "CRITICAL")
-header_sub = "Keeping Meera informed, so she can be a daughter — not a coordinator."
-if critical_count:
-    header_sub = f"⚠️  {critical_count} CRITICAL alert{'s' if critical_count > 1 else ''} need your attention."
-
-st.markdown(f"""
-<div class="cc-header">
-  <h1>🔵 CareCircle</h1>
-  <p>{header_sub}</p>
-</div>
-""", unsafe_allow_html=True)
-
-
-# ── PAGE: DAILY BRIEFING ──────────────────────────────────────────────────────
-if "Daily Briefing" in page:
-    st.markdown("### Good morning, Meera.")
-    st.markdown("Here's everything you need to know about Dad today.")
-
-    col1, col2, col3, col4 = st.columns(4)
-    stale_meds = sum(1 for m in meds if is_stale(m.get("date_prescribed"), 90))
-    with col1:
-        st.markdown(f"""<div class="metric-card">
-            <div class="label">Medications</div>
-            <div class="value">{len(meds)}</div>
-            <div class="sub">{stale_meds} possibly stale</div>
-        </div>""", unsafe_allow_html=True)
-    with col2:
-        st.markdown(f"""<div class="metric-card">
-            <div class="label">Active Alerts</div>
-            <div class="value" style="color:{'#cc0000' if alerts else '#2e7d32'}">{len(alerts)}</div>
-            <div class="sub">{'Needs attention' if alerts else 'All clear'}</div>
-        </div>""", unsafe_allow_html=True)
-    with col3:
-        st.markdown(f"""<div class="metric-card">
-            <div class="label">Lab Reports</div>
-            <div class="value">{len(labs)}</div>
-            <div class="sub">{'Recent' if labs else 'None uploaded'}</div>
-        </div>""", unsafe_allow_html=True)
-    with col4:
-        st.markdown(f"""<div class="metric-card">
-            <div class="label">Caregiver Updates</div>
-            <div class="value">{len(updates)}</div>
-            <div class="sub">{'Recent activity' if updates else 'No updates'}</div>
-        </div>""", unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    if st.button("🔄 Generate Today's Briefing", use_container_width=True, type="primary"):
-        with st.spinner("Generating your daily briefing..."):
-            st.session_state.briefing = generate_briefing()
-
-    if st.session_state.briefing:
-        st.markdown(f'<div class="briefing-box">{st.session_state.briefing}</div>', unsafe_allow_html=True)
-
-    # Crisis button
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("---")
-    st.markdown("#### 🚨 Emergency")
-    if st.button("🚨 DAD IS HAVING AN EMERGENCY — Get Crisis Card", use_container_width=True):
-        st.session_state.crisis_mode = True
-
-    if st.session_state.crisis_mode:
-        with st.spinner("Generating emergency information..."):
-            crisis = generate_crisis_card()
-        st.markdown(f'<div class="crisis-card"><h3>🚨 CRISIS CARD</h3>{crisis}</div>', unsafe_allow_html=True)
-        if st.button("✅ Emergency resolved — return to normal"):
-            st.session_state.crisis_mode = False
+    st.markdown("**Care Profiles**")
+    profiles = db_get_profiles()
+    for p in profiles:
+        is_active = st.session_state.active_profile_id == p["id"]
+        if st.button(f"{'✅ ' if is_active else ''}{p['name']}, {p['age']}y", key=f"p_{p['id']}", use_container_width=True, type="primary" if is_active else "secondary"):
+            st.session_state.active_profile_id = p["id"]
+            st.session_state.briefing = None
+            st.session_state.interaction_result = None
             st.rerun()
+    if st.button("➕ Add new profile", use_container_width=True):
+        st.session_state.show_new_profile = True
+        st.rerun()
+    if st.session_state.active_profile_id:
+        meds    = db_get_medications(st.session_state.active_profile_id)
+        alerts  = db_get_alerts(st.session_state.active_profile_id)
+        labs    = db_get_lab_reports(st.session_state.active_profile_id)
+        updates = db_get_caregiver_updates(st.session_state.active_profile_id)
+        st.markdown("---")
+        c1,c2 = st.columns(2)
+        c1.metric("Medications", len(meds)); c2.metric("Alerts", len(alerts))
+        c1.metric("Lab Reports", len(labs)); c2.metric("Updates", len(updates))
+        st.markdown("---")
+        st.markdown("**Navigation**")
+        page = st.radio("", ["🏠  Daily Briefing","💊  Medications","🔬  Lab Reports","🗣️  Caregiver Updates","⚠️  Alerts","💬  Ask CareCircle"], label_visibility="collapsed")
+    else:
+        meds=alerts=labs=updates=[]; page="🏠  Daily Briefing"
 
+if st.session_state.show_new_profile:
+    st.markdown("### ➕ Add a Care Profile")
+    c1,c2 = st.columns(2)
+    with c1:
+        nn = st.text_input("Name", placeholder="Dad")
+        na = st.number_input("Age", min_value=1, max_value=120, value=67)
+        nc = st.multiselect("Conditions", ["Type 2 Diabetes","Hypertension","Heart Disease","Post-cardiac episode","Kidney Disease","Arthritis","COPD","Hypothyroidism","Asthma","Other"])
+    with c2:
+        st.markdown("**Doctors**")
+        d1r=st.text_input("Doctor 1 role",placeholder="Cardiologist"); d1h=st.text_input("Doctor 1 hospital",placeholder="Fortis Hospital")
+        d2r=st.text_input("Doctor 2 role",placeholder="Endocrinologist"); d2h=st.text_input("Doctor 2 hospital",placeholder="Apollo Hospital")
+    c1,c2=st.columns(2)
+    with c1:
+        if st.button("✅ Create Profile", type="primary", use_container_width=True):
+            if nn:
+                doctors=[]; 
+                if d1r: doctors.append({"role":d1r,"hospital":d1h})
+                if d2r: doctors.append({"role":d2r,"hospital":d2h})
+                pid=db_create_profile(nn,na,nc,doctors)
+                if pid:
+                    st.session_state.active_profile_id=pid; st.session_state.show_new_profile=False
+                    st.success(f"Profile created for {nn}!"); st.rerun()
+    with c2:
+        if st.button("Cancel", use_container_width=True):
+            st.session_state.show_new_profile=False; st.rerun()
+    st.stop()
 
-# ── PAGE: MEDICATIONS ─────────────────────────────────────────────────────────
+if not st.session_state.active_profile_id:
+    st.markdown('''<div class="cc-header"><h1>🔵 CareCircle</h1><p>Keeping families informed, so they can be family — not coordinators.</p></div>''', unsafe_allow_html=True)
+    st.info("👈 Click **Add new profile** in the sidebar to get started." if not profiles else "👈 Select a profile from the sidebar.")
+    st.stop()
+
+active_profile = next((p for p in profiles if p["id"]==st.session_state.active_profile_id), None)
+if not active_profile: st.error("Profile not found."); st.stop()
+
+critical_count = sum(1 for a in alerts if a.get("severity")=="CRITICAL")
+header_sub = f"⚠️ {critical_count} CRITICAL alert(s) for {active_profile['name']}." if critical_count else f"Keeping you informed about {active_profile['name']}."
+st.markdown(f'''<div class="cc-header"><h1>🔵 CareCircle — {active_profile["name"]}</h1><p>{header_sub}</p></div>''', unsafe_allow_html=True)
+
+if "Daily Briefing" in page:
+    st.markdown(f"### Good morning.")
+    st.markdown(f"Here is everything you need to know about **{active_profile['name']}** today.")
+    stale_meds = sum(1 for m in meds if is_stale(m.get("date_prescribed"),90))
+    c1,c2,c3,c4=st.columns(4)
+    with c1: st.markdown(f'''<div class="metric-card"><div class="label">Medications</div><div class="value">{len(meds)}</div><div class="sub">{stale_meds} possibly stale</div></div>''',unsafe_allow_html=True)
+    with c2: st.markdown(f'''<div class="metric-card"><div class="label">Active Alerts</div><div class="value" style="color:{'#cc0000' if alerts else '#2e7d32'}">{len(alerts)}</div><div class="sub">{'Needs attention' if alerts else 'All clear'}</div></div>''',unsafe_allow_html=True)
+    with c3: st.markdown(f'''<div class="metric-card"><div class="label">Lab Reports</div><div class="value">{len(labs)}</div><div class="sub">{'On file' if labs else 'None uploaded'}</div></div>''',unsafe_allow_html=True)
+    with c4: st.markdown(f'''<div class="metric-card"><div class="label">Caregiver Updates</div><div class="value">{len(updates)}</div><div class="sub">{'Recent activity' if updates else 'No updates'}</div></div>''',unsafe_allow_html=True)
+    st.markdown("<br>",unsafe_allow_html=True)
+    if st.button("🔄 Generate Today's Briefing", use_container_width=True, type="primary"):
+        with st.spinner("Generating briefing..."):
+            st.session_state.briefing = generate_briefing(active_profile, meds, labs, updates, alerts)
+    if st.session_state.briefing:
+        st.markdown(f'''<div class="briefing-box">{st.session_state.briefing}</div>''', unsafe_allow_html=True)
+    st.markdown("<br>---")
+    st.markdown("#### 🚨 Emergency")
+    if st.button("🚨 EMERGENCY — Get Crisis Card", use_container_width=True):
+        st.session_state.crisis_mode = True
+    if st.session_state.crisis_mode:
+        with st.spinner("Generating emergency card..."):
+            crisis = generate_crisis_card(active_profile, meds)
+        st.markdown(f'''<div class="crisis-card"><h3>🚨 CRISIS CARD — {active_profile["name"].upper()}</h3>{crisis}</div>''', unsafe_allow_html=True)
+        if st.button("✅ Emergency resolved"):
+            st.session_state.crisis_mode=False; st.rerun()
+
 elif "Medications" in page:
-    st.markdown("### 💊 Medications")
-    st.markdown("Dad's verified medication list. Each entry was extracted from a prescription and confirmed before being added.")
-
-    # Upload
+    st.markdown(f"### 💊 {active_profile['name']}'s Medications")
     with st.expander("➕ Upload a new prescription", expanded=not meds):
         uploaded = st.file_uploader("Upload prescription photo", type=["jpg","jpeg","png","webp"])
         if uploaded:
             st.image(uploaded, caption="Uploaded prescription", width=400)
-            if st.button("🔍 Extract medications from this prescription", type="primary"):
+            if st.button("🔍 Extract medications", type="primary"):
                 with st.spinner("Reading prescription..."):
                     result, err = ingest_prescription(uploaded.read(), uploaded.name)
-                if err:
-                    st.error(f"Error: {err}")
+                if err: st.error(f"Error: {err}")
                 elif result:
-                    if not result.get("extraction_possible"):
-                        st.error(f"❌ Could not read prescription: {result.get('reason_if_low', 'Image unclear')}")
-                        st.warning("Please upload a clearer photo.")
+                    if not result.get("extraction_possible"): st.error(f"Could not read: {result.get('reason_if_low','Image unclear')}")
                     else:
-                        added = 0
-                        for med in result.get("medications", []):
+                        added=0
+                        for med in result.get("medications",[]):
                             if med.get("ready_to_add"):
-                                entry = {
-                                    "id": str(uuid.uuid4())[:8],
-                                    "name": med["medication_name"],
-                                    "dosage": med["dosage"],
-                                    "frequency": med["frequency"],
-                                    "duration": med.get("duration"),
-                                    "instructions": med.get("instructions"),
-                                    "prescribing_doctor": med.get("prescribing_doctor", "Unknown"),
-                                    "date_prescribed": med.get("date_prescribed"),
-                                    "source": uploaded.name,
-                                    "date_ingested": datetime.now().strftime("%Y-%m-%d"),
-                                    "verified": True,
-                                    "stale": False,
-                                    "confidence": "HIGH"
-                                }
-                                st.session_state.profile["medications"].append(entry)
-                                added += 1
-                            else:
-                                st.session_state.pending_confirmations.append({
-                                    "medication_name": med.get("medication_name", "Unknown"),
-                                    "fields_to_confirm": med.get("needs_confirmation", []),
-                                    "partial_data": med,
-                                    "source": uploaded.name
-                                })
-
-                        if added:
-                            st.success(f"✅ {added} medication(s) added to Dad's profile.")
-                        pending = len(st.session_state.pending_confirmations)
-                        if pending:
-                            st.warning(f"⚠️ {pending} medication(s) need your confirmation before being added.")
-                        if result.get("document_notes"):
-                            st.info(f"📋 {result['document_notes']}")
+                                db_add_medication(st.session_state.active_profile_id, {"id":str(uuid.uuid4())[:8],"name":med["medication_name"],"dosage":med["dosage"],"frequency":med["frequency"],"duration":med.get("duration"),"instructions":med.get("instructions"),"prescribing_doctor":med.get("prescribing_doctor","Unknown"),"date_prescribed":med.get("date_prescribed"),"source":uploaded.name,"date_ingested":datetime.now().strftime("%Y-%m-%d"),"verified":True,"confidence":"HIGH"})
+                                added+=1
+                            else: st.session_state.pending_confirmations.append({"medication_name":med.get("medication_name","Unknown"),"fields_to_confirm":med.get("needs_confirmation",[]),"partial_data":med,"source":uploaded.name})
+                        if added: st.success(f"✅ {added} medication(s) added.")
+                        if result.get("document_notes"): st.info(f"📋 {result['document_notes']}")
                         st.rerun()
-
-    # Pending confirmations
     if st.session_state.pending_confirmations:
-        st.markdown("#### ⚠️ Needs Your Confirmation")
-        st.markdown("These were extracted but NOT added — something was unclear. Please review:")
-        for i, item in enumerate(st.session_state.pending_confirmations):
-            st.markdown(f"""<div class="confirm-card">
-                <strong>⚠️ {item['medication_name']}</strong><br>
-                <span style="color:#888; font-size:13px;">Unclear fields: {', '.join(item['fields_to_confirm'])}</span>
-            </div>""", unsafe_allow_html=True)
-            col1, col2 = st.columns(2)
-            with col1:
-                confirmed_name = st.text_input("Confirm medication name", value=item["medication_name"], key=f"name_{i}")
-                confirmed_dose = st.text_input("Confirm dosage", value=item["partial_data"].get("dosage",""), key=f"dose_{i}")
-                confirmed_freq = st.text_input("Confirm frequency", value=item["partial_data"].get("frequency",""), key=f"freq_{i}")
-            with col2:
-                if st.button("✅ Add to profile", key=f"add_{i}"):
-                    entry = {
-                        "id": str(uuid.uuid4())[:8],
-                        "name": confirmed_name,
-                        "dosage": confirmed_dose,
-                        "frequency": confirmed_freq,
-                        "source": item["source"],
-                        "date_ingested": datetime.now().strftime("%Y-%m-%d"),
-                        "verified": True,
-                        "manually_confirmed": True,
-                        "stale": False,
-                        "confidence": "MANUALLY_CONFIRMED"
-                    }
-                    st.session_state.profile["medications"].append(entry)
-                    st.session_state.pending_confirmations.pop(i)
-                    st.success(f"Added {confirmed_name} to profile.")
-                    st.rerun()
-                if st.button("❌ Discard", key=f"discard_{i}"):
-                    st.session_state.pending_confirmations.pop(i)
-                    st.rerun()
-
-    # Medication list
-    if not meds:
-        st.info("No medications in profile yet. Upload a prescription above.")
+        st.markdown("#### ⚠️ Needs Confirmation")
+        for i,item in enumerate(st.session_state.pending_confirmations):
+            st.markdown(f'''<div class="confirm-card"><strong>⚠️ {item["medication_name"]}</strong> — unclear: {", ".join(item["fields_to_confirm"])}</div>''',unsafe_allow_html=True)
+            c1,c2=st.columns(2)
+            with c1:
+                cn=st.text_input("Name",value=item["medication_name"],key=f"cn{i}")
+                cd=st.text_input("Dosage",value=item["partial_data"].get("dosage",""),key=f"cd{i}")
+                cf=st.text_input("Frequency",value=item["partial_data"].get("frequency",""),key=f"cf{i}")
+            with c2:
+                if st.button("✅ Add",key=f"add{i}"):
+                    db_add_medication(st.session_state.active_profile_id,{"id":str(uuid.uuid4())[:8],"name":cn,"dosage":cd,"frequency":cf,"source":item["source"],"date_ingested":datetime.now().strftime("%Y-%m-%d"),"verified":True,"confidence":"MANUALLY_CONFIRMED"})
+                    st.session_state.pending_confirmations.pop(i); st.rerun()
+                if st.button("❌ Discard",key=f"dis{i}"):
+                    st.session_state.pending_confirmations.pop(i); st.rerun()
+    meds=db_get_medications(st.session_state.active_profile_id)
+    if not meds: st.info("No medications yet. Upload a prescription above.")
     else:
         st.markdown(f"#### Active Medications ({len(meds)})")
         for m in meds:
-            stale = is_stale(m.get("date_prescribed"), 90)
-            stale_class = "stale" if stale else ""
-            stale_tag = '<span class="tag-stale">⚠️ POSSIBLY STALE</span>' if stale else '<span class="tag-verified">✓ VERIFIED</span>'
-            prescribed = days_ago(m.get("date_prescribed"))
-            st.markdown(f"""<div class="med-card {stale_class}">
-                <div class="mname">{m['name']} {m['dosage']} &nbsp; {stale_tag}</div>
-                <div class="minfo">📅 {m['frequency']}{' &nbsp;·&nbsp; ' + m['instructions'] if m.get('instructions') else ''}</div>
-                <div class="msrc">Prescribed {prescribed} by {m.get('prescribing_doctor','Unknown')} &nbsp;·&nbsp; Source: {m.get('source','Unknown')}</div>
-            </div>""", unsafe_allow_html=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        if len(meds) >= 2:
+            stale=is_stale(m.get("date_prescribed"),90)
+            tag='<span class="tag-stale">⚠️ POSSIBLY STALE</span>' if stale else '<span class="tag-verified">✓ VERIFIED</span>'
+            st.markdown(f'''<div class="med-card {'stale' if stale else ''}"><div class="mname">{m["name"]} {m["dosage"]} &nbsp; {tag}</div><div class="minfo">📅 {m["frequency"]}{" &nbsp;·&nbsp; "+m["instructions"] if m.get("instructions") else ""}</div><div class="msrc">Prescribed {days_ago(m.get("date_prescribed"))} by {m.get("prescribing_doctor","Unknown")} &nbsp;·&nbsp; Source: {m.get("source","Unknown")}</div></div>''',unsafe_allow_html=True)
+        st.markdown("<br>",unsafe_allow_html=True)
+        if len(meds)>=2:
             if st.button("🔍 Check for Drug Interactions", type="primary", use_container_width=True):
                 with st.spinner("Checking interactions..."):
-                    result = run_interaction_check()
-                if result:
-                    st.session_state["interaction_result"] = result
-
+                    result=run_interaction_check(st.session_state.active_profile_id,meds,active_profile.get("conditions",[]))
+                if result: st.session_state.interaction_result=result
         if st.session_state.get("interaction_result"):
-            result = st.session_state["interaction_result"]
-            severity_icons = {"CRITICAL": "🚨", "HIGH": "⚠️", "MEDIUM": "📋", "LOW": "ℹ️", "NONE": "✅"}
-            st.markdown("---")
-            st.markdown("#### 🔍 Drug Interaction Results")
+            result=st.session_state.interaction_result
+            icons={"CRITICAL":"🚨","HIGH":"⚠️","MEDIUM":"📋","LOW":"ℹ️","NONE":"✅"}
+            st.markdown("---"); st.markdown("#### 🔍 Drug Interaction Results")
             if result["interactions_found"]:
-                for interaction in result.get("interactions", []):
-                    sev = interaction["severity"]
-                    cls = "alert-critical" if sev == "CRITICAL" else "alert-high" if sev == "HIGH" else "alert-low"
-                    sicon = severity_icons.get(sev, "ℹ️")
-                    drugs = " + ".join(interaction["drugs_involved"])
-                    st.markdown(f"""<div class="{cls}">
-                        <strong>{sicon} {sev}: {drugs}</strong><br>
-                        <span style="font-size:14px">{interaction['what_happens']}</span><br><br>
-                        <strong>What to do:</strong> {interaction['what_to_do']}<br>
-                        <strong>Urgency:</strong> {interaction['urgency']}
-                    </div>""", unsafe_allow_html=True)
-            else:
-                st.success(f"✅ {result.get('reassurance', 'No significant interactions found.')}")
+                for ix in result.get("interactions",[]):
+                    sev=ix["severity"]; cls="alert-critical" if sev=="CRITICAL" else "alert-high" if sev=="HIGH" else "alert-low"
+                    st.markdown(f'''<div class="{cls}"><strong>{icons.get(sev,"ℹ️")} {sev}: {" + ".join(ix["drugs_involved"])}</strong><br><span style="font-size:14px">{ix["what_happens"]}</span><br><br><strong>What to do:</strong> {ix["what_to_do"]}<br><strong>Urgency:</strong> {ix["urgency"]}</div>''',unsafe_allow_html=True)
+            else: st.success(f"✅ {result.get('reassurance','No significant interactions found.')}")
 
-
-# ── PAGE: LAB REPORTS ─────────────────────────────────────────────────────────
 elif "Lab Reports" in page:
-    st.markdown("### 🔬 Lab Reports")
-
-    with st.expander("➕ Add a lab result manually", expanded=True):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            test_name = st.text_input("Test name (e.g. Fasting Blood Sugar)")
-            test_value = st.text_input("Value (e.g. 180)")
-            test_unit = st.selectbox("Unit", ["mg/dL", "mmol/L", "g/dL", "%", "IU/L", "mEq/L", "other"])
-        with col2:
-            ref_range = st.text_input("Reference range (e.g. 70-100)")
-            test_date = st.date_input("Date of test", value=date.today())
-            lab_name = st.text_input("Lab / Hospital name")
-        with col3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("➕ Add Lab Result", type="primary"):
-                if test_name and test_value:
-                    entry = {
-                        "id": str(uuid.uuid4())[:8],
-                        "test": test_name,
-                        "value": test_value,
-                        "unit": test_unit,
-                        "reference_range": ref_range,
-                        "date": str(test_date),
-                        "lab": lab_name,
-                        "date_ingested": datetime.now().strftime("%Y-%m-%d"),
-                        "stale": is_stale(str(test_date), 30)
-                    }
-                    st.session_state.profile["lab_reports"].append(entry)
-                    st.success(f"✅ {test_name} added.")
-                    st.rerun()
-
-    if not labs:
-        st.info("No lab reports yet. Add one above.")
+    st.markdown(f"### 🔬 {active_profile['name']}'s Lab Reports")
+    with st.expander("➕ Add a lab result", expanded=True):
+        c1,c2,c3=st.columns(3)
+        with c1: tn=st.text_input("Test name",placeholder="Fasting Blood Sugar"); tv=st.text_input("Value",placeholder="180"); tu=st.selectbox("Unit",["mg/dL","mmol/L","g/dL","%","IU/L","mEq/L","other"])
+        with c2: rr=st.text_input("Reference range",placeholder="70-100"); td=st.date_input("Date of test",value=date.today()); ln=st.text_input("Lab / Hospital")
+        with c3:
+            st.markdown("<br><br>",unsafe_allow_html=True)
+            if st.button("➕ Add",type="primary",use_container_width=True):
+                if tn and tv:
+                    db_add_lab_report(st.session_state.active_profile_id,{"id":str(uuid.uuid4())[:8],"test":tn,"value":tv,"unit":tu,"reference_range":rr,"date":str(td),"lab":ln,"date_ingested":datetime.now().strftime("%Y-%m-%d")})
+                    st.success(f"✅ {tn} added."); st.rerun()
+    labs=db_get_lab_reports(st.session_state.active_profile_id)
+    if not labs: st.info("No lab reports yet.")
     else:
-        for r in sorted(labs, key=lambda x: x.get("date",""), reverse=True):
-            stale = is_stale(r.get("date"), 30)
-            tag = '<span class="tag-stale">⚠️ STALE (>30 days)</span>' if stale else '<span class="tag-verified">✓ RECENT</span>'
-            st.markdown(f"""<div class="med-card {'stale' if stale else ''}">
-                <div class="mname">{r['test']}: {r['value']} {r['unit']} &nbsp; {tag}</div>
-                <div class="minfo">Reference range: {r.get('reference_range','Not specified')}</div>
-                <div class="msrc">Date: {r.get('date','Unknown')} &nbsp;·&nbsp; Lab: {r.get('lab','Unknown')}</div>
-            </div>""", unsafe_allow_html=True)
+        for r in labs:
+            stale=is_stale(r.get("date"),30)
+            tag='<span class="tag-stale">⚠️ STALE</span>' if stale else '<span class="tag-verified">✓ RECENT</span>'
+            st.markdown(f'''<div class="med-card {'stale' if stale else ''}"><div class="mname">{r["test"]}: {r["value"]} {r["unit"]} &nbsp; {tag}</div><div class="minfo">Reference range: {r.get("reference_range","Not specified")}</div><div class="msrc">Date: {r.get("date","?")} &nbsp;·&nbsp; Lab: {r.get("lab","?")}</div></div>''',unsafe_allow_html=True)
 
-
-# ── PAGE: CAREGIVER UPDATES ───────────────────────────────────────────────────
 elif "Caregiver" in page:
-    st.markdown("### 🗣️ Caregiver Updates")
-    st.markdown("Log what the caregiver reports. Everything is tagged as 'interpreted' — not clinical fact.")
-
-    with st.expander("➕ Add caregiver update", expanded=True):
-        update_text = st.text_area("What did the caregiver report?", placeholder="e.g. Uncle ne aaj BP ki dawai li, thoda chakkar aaya...")
-        update_date = st.date_input("Date", value=date.today())
-        col1, col2 = st.columns(2)
-        with col1:
-            meds_taken = st.checkbox("Medications taken")
-            had_meals  = st.checkbox("Had meals")
-        with col2:
-            symptoms   = st.text_input("Symptoms reported (if any)")
-
-        if st.button("➕ Log Update", type="primary"):
-            if update_text:
-                entry = {
-                    "id": str(uuid.uuid4())[:8],
-                    "text": update_text,
-                    "date": str(update_date),
-                    "medications_taken": meds_taken,
-                    "had_meals": had_meals,
-                    "symptoms": symptoms,
-                    "source": "Caregiver-A",
-                    "tagged_as": "interpreted",
-                    "date_ingested": datetime.now().strftime("%Y-%m-%d")
-                }
-                st.session_state.profile["caregiver_updates"].append(entry)
-                st.success("✅ Update logged.")
-                st.rerun()
-
+    st.markdown(f"### 🗣️ Caregiver Updates for {active_profile['name']}")
+    with st.expander("➕ Log an update", expanded=True):
+        ut=st.text_area("What did the caregiver report?",placeholder="Uncle ne aaj BP ki dawai li...")
+        c1,c2,c3=st.columns(3)
+        with c1: ud=st.date_input("Date",value=date.today()); mt=st.checkbox("Medications taken")
+        with c2: hm=st.checkbox("Had meals"); sym=st.text_input("Symptoms (if any)")
+        with c3:
+            st.markdown("<br><br>",unsafe_allow_html=True)
+            if st.button("➕ Log Update",type="primary",use_container_width=True):
+                if ut:
+                    db_add_caregiver_update(st.session_state.active_profile_id,{"id":str(uuid.uuid4())[:8],"text":ut,"date":str(ud),"medications_taken":mt,"had_meals":hm,"symptoms":sym,"source":"Caregiver-A","date_ingested":datetime.now().strftime("%Y-%m-%d")})
+                    st.success("✅ Update logged."); st.rerun()
+    updates=db_get_caregiver_updates(st.session_state.active_profile_id)
     if updates:
-        st.markdown(f"#### Recent Updates ({len(updates)})")
-        for u in sorted(updates, key=lambda x: x.get("date",""), reverse=True):
-            age = days_ago(u.get("date"))
-            sym = f" &nbsp;·&nbsp; Symptoms: _{u['symptoms']}_" if u.get("symptoms") else ""
-            st.markdown(f"""<div class="med-card">
-                <div class="mname">Caregiver-A &nbsp;·&nbsp; {age}</div>
-                <div class="minfo">{u['text']}</div>
-                <div class="msrc">
-                    Meds taken: {'✓' if u.get('medications_taken') else '?'} &nbsp;·&nbsp;
-                    Meals: {'✓' if u.get('had_meals') else '?'}{sym} &nbsp;·&nbsp;
-                    <em>Tagged as: interpreted (not clinical fact)</em>
-                </div>
-            </div>""", unsafe_allow_html=True)
+        for u in updates:
+            sym=f" · Symptoms: _{u['symptoms']}_" if u.get("symptoms") else ""
+            st.markdown(f'''<div class="med-card"><div class="mname">Caregiver-A · {days_ago(u.get("date"))}</div><div class="minfo">{u["text"]}</div><div class="msrc">Meds: {'✓' if u.get("medications_taken") else '?'} · Meals: {'✓' if u.get("had_meals") else '?'}{sym} · <em>interpreted</em></div></div>''',unsafe_allow_html=True)
 
-
-# ── PAGE: ALERTS ──────────────────────────────────────────────────────────────
 elif "Alerts" in page:
-    st.markdown("### ⚠️ Alerts")
-
-    if not alerts:
-        st.success("✅ No active alerts. Everything looks okay based on the information we have.")
+    st.markdown(f"### ⚠️ Alerts — {active_profile['name']}")
+    alerts=db_get_alerts(st.session_state.active_profile_id)
+    if not alerts: st.success("✅ No active alerts.")
     else:
         for a in alerts:
-            sev = a.get("severity","LOW")
-            cls = "alert-critical" if sev == "CRITICAL" else "alert-high" if sev == "HIGH" else "alert-low"
-            icon = "🚨" if sev == "CRITICAL" else "⚠️" if sev == "HIGH" else "ℹ️"
-            drugs = " + ".join(a.get("drugs",[]))
-            st.markdown(f"""<div class="{cls}">
-                <strong>{icon} {sev}: {drugs}</strong><br>
-                <span style="font-size:14px">{a.get('summary','')}</span><br><br>
-                <strong>What to do:</strong> {a.get('action','')}<br>
-                <strong>Urgency:</strong> {a.get('urgency','')}
-            </div>""", unsafe_allow_html=True)
+            sev=a.get("severity","LOW"); cls="alert-critical" if sev=="CRITICAL" else "alert-high" if sev=="HIGH" else "alert-low"
+            icon="🚨" if sev=="CRITICAL" else "⚠️" if sev=="HIGH" else "ℹ️"
+            drugs=" + ".join(a.get("drugs") or [])
+            st.markdown(f'''<div class="{cls}"><strong>{icon} {sev}: {drugs}</strong><br><span style="font-size:14px">{a.get("summary","")}</span><br><br><strong>What to do:</strong> {a.get("action","")}<br><strong>Urgency:</strong> {a.get("urgency","")}</div>''',unsafe_allow_html=True)
+    st.markdown("---"); st.markdown("**Staleness Check**")
+    sm=[m for m in meds if is_stale(m.get("date_prescribed"),90)]; sl=[r for r in labs if is_stale(r.get("date"),30)]
+    if sm: st.warning(f"⚠️ {len(sm)} prescription(s) older than 90 days."); [st.markdown(f"  · {m['name']} {m['dosage']} — {days_ago(m.get('date_prescribed'))}") for m in sm]
+    if sl: st.warning(f"⚠️ {len(sl)} lab report(s) older than 30 days.")
+    if not sm and not sl: st.success("✅ All data within freshness thresholds.")
 
-    st.markdown("---")
-    st.markdown("**Staleness check**")
-    stale_meds = [m for m in meds if is_stale(m.get("date_prescribed"), 90)]
-    stale_labs = [r for r in labs if is_stale(r.get("date"), 30)]
-    if stale_meds:
-        st.warning(f"⚠️ {len(stale_meds)} prescription(s) are older than 90 days — please verify they're still current.")
-        for m in stale_meds:
-            st.markdown(f"  · {m['name']} {m['dosage']} — prescribed {days_ago(m.get('date_prescribed'))}")
-    if stale_labs:
-        st.warning(f"⚠️ {len(stale_labs)} lab report(s) are older than 30 days.")
-    if not stale_meds and not stale_labs:
-        st.success("✅ All data is within freshness thresholds.")
-
-
-# ── PAGE: ASK CARECIRCLE ──────────────────────────────────────────────────────
 elif "Ask" in page:
-    st.markdown("### 💬 Ask CareCircle")
-    st.markdown("Ask anything about Dad's health. CareCircle will answer based only on what's in his profile — and will always say when it doesn't know.")
-
-    query = st.text_input("Your question", placeholder="What medications is Dad on? / Is Dad's blood sugar high? / What did the caregiver say today?")
-
+    st.markdown(f"### 💬 Ask about {active_profile['name']}")
+    query=st.text_input("Your question",placeholder=f"What medications is {active_profile['name']} on?")
     if query:
-        if detect_crisis(query):
-            st.error("🚨 This sounds like an emergency. Switch to the Daily Briefing page and use the Crisis Card button immediately.")
+        if detect_crisis(query): st.error("🚨 Emergency detected. Go to Daily Briefing and use the Crisis Card button immediately.")
         else:
-            if st.button("Ask", type="primary"):
-                with st.spinner("Checking Dad's profile..."):
-                    answer = answer_query(query)
-                st.markdown(f'<div class="briefing-box">{answer}</div>', unsafe_allow_html=True)
+            if st.button("Ask",type="primary"):
+                with st.spinner("Checking profile..."):
+                    answer=answer_query(query,active_profile,meds,labs,updates)
+                st.markdown(f'''<div class="briefing-box">{answer}</div>''',unsafe_allow_html=True)
+    st.markdown("---"); st.markdown("**Example questions:**")
+    [st.markdown(f"  · _{e}_") for e in [f"What medications is {active_profile['name']} on?","When was the last lab report?","What did the caregiver say today?","Are any prescriptions out of date?","Is there anything urgent?"]]
 
-    st.markdown("---")
-    st.markdown("**Example questions:**")
-    examples = [
-        "What medications is Dad on right now?",
-        "When was his last lab report?",
-        "What did the caregiver say today?",
-        "Are any of his prescriptions out of date?",
-        "Is there anything urgent I should know?"
-    ]
-    for e in examples:
-        st.markdown(f"  · _{e}_")
-
-
-# ── FOOTER ────────────────────────────────────────────────────────────────────
 st.markdown("---")
-st.markdown(
-    '<p style="font-size:11px; color:#aaa; text-align:center;">'
-    'CareCircle · Built for Meera · 100xEngineers Applied AI Capstone · '
-    'Not a medical device. Always consult a doctor for medical decisions.'
-    '</p>',
-    unsafe_allow_html=True
-)
+st.markdown('<p style="font-size:11px;color:#aaa;text-align:center;">CareCircle · 100xEngineers Applied AI Capstone · Not a medical device. Always consult a doctor.</p>',unsafe_allow_html=True)
