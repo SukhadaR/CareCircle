@@ -232,10 +232,6 @@ for key in ["active_profile_id","pending_confirmations","briefing","crisis_mode"
 with st.sidebar:
     st.markdown("### 🔵 CareCircle")
     st.markdown("---")
-    api_key = st.text_input("Anthropic API Key", type="password", placeholder="sk-ant-... (optional)")
-    if api_key:
-        st.session_state.api_key = api_key
-        st.success("API key set ✓")
     st.markdown("---")
     st.markdown("**Care Profiles**")
     profiles = db_get_profiles()
@@ -318,7 +314,7 @@ if "Daily Briefing" in page:
             st.session_state.briefing = generate_briefing(active_profile, meds, labs, updates, alerts)
     if st.session_state.briefing:
         st.markdown(f'''<div class="briefing-box">{st.session_state.briefing}</div>''', unsafe_allow_html=True)
-    st.markdown("<br>---")
+    st.markdown("---")
     st.markdown("#### 🚨 Emergency")
     if st.button("🚨 EMERGENCY — Get Crisis Card", use_container_width=True):
         st.session_state.crisis_mode = True
