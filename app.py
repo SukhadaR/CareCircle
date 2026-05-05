@@ -115,7 +115,7 @@ if "crisis_mode" not in st.session_state:
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 def get_client():
-    key = st.session_state.get("api_key", "")
+    key = st.session_state.get("api_key", "") or st.secrets.get("ANTHROPIC_API_KEY", "")
     if not key:
         return None
     return anthropic.Anthropic(api_key=key)
