@@ -155,6 +155,28 @@ def db_delete_prescription(prescription_id):
     try: sb.table("prescriptions").delete().eq("id", prescription_id).execute()
     except Exception as e: st.error(f"Error: {e}")
 
+def db_check_duplicate_prescription(pid, filename, date_prescribed):
+    sb = get_supabase()
+    if not sb: return False
+    try:
+        # Check by filename
+        by_name = sb.table("prescriptions").select("id").eq("profile_id", pid).eq("filename", filename).execute().data
+        if by_name: return "filename"
+        # Check by doctor + date combination
+        if date_prescribed:
+            by_date = sb.table("prescriptions").select("id").eq("profile_id", pid).eq("date_prescribed", date_prescribed).execute().data
+            if by_date: return "date"
+        return False
+    except: return False
+
+def db_check_duplicate_medication(pid, name, dosage):
+    sb = get_supabase()
+    if not sb: return False
+    try:
+        result = sb.table("medications").select("id").eq("profile_id", pid).ilike("name", name).eq("dosage", dosage).execute().data
+        return len(result) > 0
+    except: return False
+
 def get_ai_client():
     key = st.session_state.get("api_key", "") or st.secrets.get("ANTHROPIC_API_KEY", "")
     if not key: return None
@@ -356,22 +378,38 @@ elif "Medications" in page:
                 elif result:
                     if not result.get("extraction_possible"): st.error(f"Could not read: {result.get('reason_if_low','Image unclear')}")
                     else:
-                        added=0
-                        extracted_names=[]
-                        doctor_name="Unknown"
-                        date_prescribed=None
-                        for med in result.get("medications",[]):
-                            if med.get("ready_to_add"):
-                                db_add_medication(st.session_state.active_profile_id, {"id":str(uuid.uuid4())[:8],"name":med["medication_name"],"dosage":med["dosage"],"frequency":med["frequency"],"duration":med.get("duration"),"instructions":med.get("instructions"),"prescribing_doctor":med.get("prescribing_doctor","Unknown"),"date_prescribed":med.get("date_prescribed"),"source":uploaded.name,"date_ingested":datetime.now().strftime("%Y-%m-%d"),"verified":True,"confidence":"HIGH"})
-                                extracted_names.append(f"{med['medication_name']} {med['dosage']}")
-                                if med.get("prescribing_doctor"): doctor_name=med["prescribing_doctor"]
-                                if med.get("date_prescribed"): date_prescribed=med["date_prescribed"]
-                                added+=1
-                            else: st.session_state.pending_confirmations.append({"medication_name":med.get("medication_name","Unknown"),"fields_to_confirm":med.get("needs_confirmation",[]),"partial_data":med,"source":uploaded.name})
-                        db_save_prescription(st.session_state.active_profile_id, {"id":str(uuid.uuid4())[:8],"filename":uploaded.name,"prescribed_by":doctor_name,"date_prescribed":date_prescribed,"medications_extracted":extracted_names,"notes":result.get("document_notes",""),"date_uploaded":datetime.now().strftime("%Y-%m-%d")})
-                        if added: st.success(f"✅ {added} medication(s) added.")
-                        if result.get("document_notes"): st.info(f"📋 {result['document_notes']}")
-                        st.rerun()
+                        # --- DUPLICATE PRESCRIPTION CHECK ---
+                        first_med = next((m for m in result.get("medications",[]) if m.get("date_prescribed")), None)
+                        check_date = first_med["date_prescribed"] if first_med else None
+                        dup = db_check_duplicate_prescription(st.session_state.active_profile_id, uploaded.name, check_date)
+                        if dup == "filename":
+                            st.warning(f"⚠️ A prescription with the filename **{uploaded.name}** already exists in Dad's profile. This looks like a duplicate — not added.")
+                        elif dup == "date":
+                            st.warning(f"⚠️ A prescription from the same date (**{check_date}**) already exists. Please check the Prescriptions tab before adding again.")
+                        else:
+                            added=0
+                            skipped=0
+                            extracted_names=[]
+                            doctor_name="Unknown"
+                            date_prescribed=None
+                            for med in result.get("medications",[]):
+                                if med.get("ready_to_add"):
+                                    # Check duplicate medication
+                                    if db_check_duplicate_medication(st.session_state.active_profile_id, med["medication_name"], med["dosage"]):
+                                        skipped+=1
+                                        extracted_names.append(f"{med['medication_name']} {med['dosage']} (already exists)")
+                                    else:
+                                        db_add_medication(st.session_state.active_profile_id, {"id":str(uuid.uuid4())[:8],"name":med["medication_name"],"dosage":med["dosage"],"frequency":med["frequency"],"duration":med.get("duration"),"instructions":med.get("instructions"),"prescribing_doctor":med.get("prescribing_doctor","Unknown"),"date_prescribed":med.get("date_prescribed"),"source":uploaded.name,"date_ingested":datetime.now().strftime("%Y-%m-%d"),"verified":True,"confidence":"HIGH"})
+                                        extracted_names.append(f"{med['medication_name']} {med['dosage']}")
+                                        added+=1
+                                    if med.get("prescribing_doctor"): doctor_name=med["prescribing_doctor"]
+                                    if med.get("date_prescribed"): date_prescribed=med["date_prescribed"]
+                                else: st.session_state.pending_confirmations.append({"medication_name":med.get("medication_name","Unknown"),"fields_to_confirm":med.get("needs_confirmation",[]),"partial_data":med,"source":uploaded.name})
+                            db_save_prescription(st.session_state.active_profile_id, {"id":str(uuid.uuid4())[:8],"filename":uploaded.name,"prescribed_by":doctor_name,"date_prescribed":date_prescribed,"medications_extracted":extracted_names,"notes":result.get("document_notes",""),"date_uploaded":datetime.now().strftime("%Y-%m-%d")})
+                            if added: st.success(f"✅ {added} new medication(s) added.")
+                            if skipped: st.info(f"ℹ️ {skipped} medication(s) already in profile — skipped.")
+                            if result.get("document_notes"): st.info(f"📋 {result['document_notes']}")
+                            st.rerun()
     if st.session_state.pending_confirmations:
         st.markdown("#### ⚠️ Needs Confirmation")
         for i,item in enumerate(st.session_state.pending_confirmations):
