@@ -12,6 +12,7 @@ from datetime import datetime, date
 from supabase import create_client
 
 st.set_page_config(page_title="CareCircle", page_icon="🔵", layout="wide", initial_sidebar_state="expanded")
+# v2.1
 
 st.markdown("""
 <style>
@@ -546,11 +547,18 @@ elif "Medications" in page:
 
             col_med, col_del = st.columns([10,1])
             with col_med:
-                st.markdown(f'''<div class="med-card {'stale' if stale else ''}">
-                    <div class="mname">{m["name"]} {m["dosage"]} &nbsp; {tag} &nbsp; {course_tag}</div>
-                    <div class="minfo">📅 {m["frequency"]}{" &nbsp;·&nbsp; "+m["instructions"] if m.get("instructions") else ""}{" &nbsp;·&nbsp; Duration: "+m["duration"] if m.get("duration") else ""}</div>
-                    <div class="msrc">Prescribed {days_ago(m.get("date_prescribed"))} by {m.get("prescribing_doctor","Unknown")} &nbsp;·&nbsp; Source: {m.get("source","Unknown")}</div>
-                </div>''',unsafe_allow_html=True)
+                name_line = f"{m['name']} {m['dosage']}"
+                info_line = f"📅 {m['frequency']}"
+                if m.get("instructions"): info_line += f" · {m['instructions']}"
+                if m.get("duration"): info_line += f" · Duration: {m['duration']}"
+                src_line = f"Prescribed {days_ago(m.get('date_prescribed'))} by {m.get('prescribing_doctor','Unknown')} · Source: {m.get('source','Unknown')}"
+                border = "#FFA500" if stale else "#2E75B6"
+                card_html = f"""<div style="background:white;border-radius:10px;padding:16px 18px;border:1px solid #e0e0e0;margin-bottom:10px;border-left:4px solid {border}">
+                    <div style="font-size:16px;font-weight:700;color:#1E3A5F">{name_line} &nbsp; {tag} &nbsp; {course_tag}</div>
+                    <div style="font-size:13px;color:#555;margin-top:4px">{info_line}</div>
+                    <div style="font-size:11px;color:#aaa;margin-top:6px">{src_line}</div>
+                </div>"""
+                st.markdown(card_html, unsafe_allow_html=True)
                 if course_warning:
                     st.warning(f"⚠️ {m['name']}: {course_warning}")
             with col_del:
