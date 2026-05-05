@@ -201,12 +201,23 @@ def db_delete_appointment(appt_id):
     try: sb.table("appointments").delete().eq("id", appt_id).execute()
     except Exception as e: st.error(f"Error: {e}")
 
+def parse_any_date(date_str):
+    """Parse dates in any common format."""
+    if not date_str: return None
+    for fmt in ["%Y-%m-%d", "%d %B %Y", "%d %b %Y", "%B %d, %Y", "%d/%m/%Y", "%d-%m-%Y", "%d %B, %Y"]:
+        try: return datetime.strptime(date_str.strip()[:20], fmt).date()
+        except: continue
+    # Try just the first 10 chars as YYYY-MM-DD
+    try: return datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+    except: return None
+
 def get_course_end_date(date_prescribed, duration_str):
     """Parse duration string and return end date."""
     duration_str = duration_str or ""
     if not date_prescribed or not duration_str.strip(): return None
     try:
-        start = datetime.strptime(date_prescribed[:10], "%Y-%m-%d").date()
+        start = parse_any_date(date_prescribed)
+        if not start: return None
         dl = duration_str.lower()
         days = None
         if any(x in dl for x in ["7 day","one week","1 week","seven day"]): days = 7
@@ -243,19 +254,21 @@ def get_ai_client():
 def is_stale(date_str, threshold_days):
     if not date_str: return True
     try:
-        d = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+        d = parse_any_date(str(date_str))
+        if not d: return True
         return (date.today() - d).days > threshold_days
     except: return False
 
 def days_ago(date_str):
     if not date_str: return "unknown date"
     try:
-        d = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+        d = parse_any_date(str(date_str))
+        if not d: return str(date_str)
         diff = (date.today() - d).days
         if diff == 0: return "today"
         if diff == 1: return "yesterday"
         return f"{diff} days ago"
-    except: return date_str
+    except: return str(date_str)
 
 def parse_json_response(text):
     raw = text.strip()
