@@ -126,6 +126,76 @@ def db_delete_medication(med_id):
     try: sb.table("medications").delete().eq("id", med_id).execute()
     except Exception as e: st.error(f"Error: {e}")
 
+def db_update_refill(med_id, refill_date, quantity, tablets_per_day):
+    sb = get_supabase()
+    if not sb: return
+    try:
+        sb.table("medications").update({
+            "tablets_remaining": quantity,
+            "tablets_per_day": tablets_per_day
+        }).eq("id", med_id).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def get_supply_info(refill_date_str, quantity, tablets_per_day):
+    """Returns dict with days_remaining, runout_date, alert_level."""
+    from datetime import timedelta
+    try:
+        if not refill_date_str or not quantity or not tablets_per_day: return None
+        refill_date = parse_any_date(str(refill_date_str))
+        if not refill_date: return None
+        tpd = float(tablets_per_day)
+        qty = float(quantity)
+        if tpd <= 0: return None
+        total_days = qty / tpd
+        runout_date = refill_date + timedelta(days=int(total_days))
+        days_left = (runout_date - date.today()).days
+        if days_left <= 0: level = "critical"
+        elif days_left <= 3: level = "urgent"
+        elif days_left <= 7: level = "warning"
+        else: level = "ok"
+        return {
+            "days_left": days_left,
+            "runout_date": runout_date,
+            "alert_level": level,
+            "refill_date": refill_date,
+            "total_days": int(total_days)
+        }
+    except: return None
+
+def get_pending_notifications(meds, appointments):
+    """Generate what SMS/push alerts WOULD fire today."""
+    from datetime import timedelta
+    alerts = []
+    today = date.today()
+    for m in meds:
+        info = get_supply_info(
+            m.get("date_ingested"),  # use ingestion date as proxy if no refill date
+            m.get("tablets_remaining"),
+            m.get("tablets_per_day")
+        )
+        if info:
+            if info["alert_level"] == "critical":
+                alerts.append({"priority": 1, "type": "supply", "message": f"🚨 {m['name']} has RUN OUT — order today"})
+            elif info["alert_level"] == "urgent":
+                alerts.append({"priority": 1, "type": "supply", "message": f"🔴 {m['name']} runs out in {info['days_left']} day(s) — order now"})
+            elif info["alert_level"] == "warning":
+                alerts.append({"priority": 2, "type": "supply", "message": f"⚠️ {m['name']} runs out in {info['days_left']} days — plan refill"})
+    for a in appointments:
+        if a.get("status") == "done": continue
+        du = days_until(a.get("appointment_date"))
+        if du is None: continue
+        if du == 1:
+            alerts.append({"priority": 1, "type": "appointment", "message": f"🏥 {a['doctor_role']} appointment is TOMORROW — is Dad ready?"})
+        elif du == 0:
+            alerts.append({"priority": 1, "type": "appointment", "message": f"🏥 {a['doctor_role']} appointment is TODAY"})
+        elif du == 3:
+            alerts.append({"priority": 2, "type": "appointment", "message": f"📅 {a['doctor_role']} appointment in 3 days ({a['appointment_date']})"})
+        checklist = a.get("pre_checklist") or {}
+        if checklist.get("blood_test") and du and 1 <= du <= 5:
+            alerts.append({"priority": 1, "type": "checklist", "message": f"🩸 Blood test needed before {a['doctor_role']} visit in {du} day(s) — has it been done?"})
+    alerts.sort(key=lambda x: x["priority"])
+    return alerts
+
 def db_delete_lab_report(report_id):
     sb = get_supabase()
     if not sb: return
@@ -431,6 +501,20 @@ if "Daily Briefing" in page:
             st.session_state.briefing = generate_briefing(active_profile, meds, labs, updates, alerts)
     if st.session_state.briefing:
         st.markdown(f'''<div class="briefing-box">{st.session_state.briefing}</div>''', unsafe_allow_html=True)
+    # Notification preview panel
+    st.markdown("---")
+    st.markdown("#### 📱 Pending Alerts")
+    st.caption("Alerts Meera would receive by SMS — even if she hasn't opened the app.")
+    _appointments = db_get_appointments(st.session_state.active_profile_id)
+    _pending = get_pending_notifications(meds, _appointments)
+    if _pending:
+        for _n in _pending:
+            if _n["priority"] == 1: st.error(_n["message"])
+            else: st.warning(_n["message"])
+    else:
+        st.success("✅ No urgent alerts right now — everything is on track.")
+    st.caption("📲 Next version: these fire as SMS via Twilio even when app is closed.")
+
     st.markdown("---")
     st.markdown("#### 🚨 Emergency")
     if st.button("🚨 EMERGENCY — Get Crisis Card", use_container_width=True):
@@ -562,6 +646,34 @@ elif "Medications" in page:
                 if dur:  info += f" · Duration: {dur}"
                 st.caption(info)
                 st.caption(f"Prescribed {days_ago(m.get('date_prescribed'))} by {m.get('prescribing_doctor','Unknown')} · Source: {m.get('source','Unknown')}")
+                # Supply tracking — refill based
+                supply = get_supply_info(m.get("date_ingested"), m.get("tablets_remaining"), m.get("tablets_per_day"))
+                if supply:
+                    dl = supply["days_left"]
+                    rd = supply["runout_date"].strftime("%d %b %Y")
+                    if supply["alert_level"] == "critical":
+                        st.error(f"🚨 OUT OF STOCK as of {rd} — order immediately")
+                    elif supply["alert_level"] == "urgent":
+                        st.error(f"🔴 Runs out {rd} — {dl} day(s) left, order now")
+                    elif supply["alert_level"] == "warning":
+                        st.warning(f"⚠️ Runs out {rd} — {dl} days left, plan refill")
+                    else:
+                        st.success(f"💊 {dl} days of supply left — runs out {rd}")
+                with st.expander("📦 Log monthly refill", expanded=supply is None):
+                    st.caption("Enter this when Meera orders medications — system calculates run-out automatically.")
+                    sc1, sc2, sc3 = st.columns(3)
+                    with sc1:
+                        new_qty = st.number_input("Tablets ordered", min_value=1, value=int(m.get("tablets_remaining") or 30), step=1, key=f"qty_{m['id']}")
+                    with sc2:
+                        new_tpd = st.number_input("Tablets per day", min_value=0.5, max_value=10.0, value=float(m.get("tablets_per_day") or 1.0), step=0.5, key=f"tpd_{m['id']}")
+                    with sc3:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        days_calc = int(new_qty / new_tpd)
+                        st.caption(f"= {days_calc} days supply")
+                    if st.button(f"💾 Save refill", key=f"save_supply_{m['id']}"):
+                        db_update_refill(m["id"], date.today(), new_qty, new_tpd)
+                        st.success(f"✅ Refill logged — {days_calc} days of supply from today")
+                        st.rerun()
                 st.markdown("---")
             with col_del:
                 if st.button("🗑️", key=f"del_med_{m['id']}", help="Delete this medication"):
@@ -771,6 +883,24 @@ elif "Alerts" in page:
     if sm: st.warning(f"⚠️ {len(sm)} prescription(s) older than 90 days."); [st.markdown(f"  · {m['name']} {m['dosage']} — {days_ago(m.get('date_prescribed'))}") for m in sm]
     if sl: st.warning(f"⚠️ {len(sl)} lab report(s) older than 30 days.")
     if not sm and not sl: st.success("✅ All data within freshness thresholds.")
+
+    st.markdown("---"); st.markdown("**Medicine Supply**")
+    low_supply = []
+    for m in meds:
+        supply = get_supply_info(m.get("date_ingested"), m.get("tablets_remaining"), m.get("tablets_per_day"))
+        if supply and supply["alert_level"] in ("critical","urgent","warning"):
+            low_supply.append((m["name"], supply))
+    if low_supply:
+        for name, supply in low_supply:
+            dl = supply["days_left"]
+            rd = supply["runout_date"].strftime("%d %b %Y")
+            if supply["alert_level"] == "critical": st.error(f"🚨 {name} — OUT OF STOCK as of {rd}")
+            elif supply["alert_level"] == "urgent": st.error(f"🔴 {name} — runs out {rd} ({dl} days)")
+            else: st.warning(f"⚠️ {name} — runs out {rd} ({dl} days)")
+    else:
+        tracked = [m for m in meds if m.get("tablets_remaining") is not None]
+        if tracked: st.success("✅ All medications have adequate supply.")
+        else: st.info("ℹ️ No supply tracking yet. Go to 💊 Medications → Log monthly refill.")
 
 elif "Ask" in page:
     st.markdown(f"### 💬 Ask about {active_profile['name']}")
