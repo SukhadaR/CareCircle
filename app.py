@@ -515,10 +515,6 @@ elif "Medications" in page:
     if not meds: st.info("No medications yet. Upload a prescription above.")
     else:
         st.markdown(f"#### Active Medications ({len(meds)})")
-        # TEMP DEBUG
-        for m in meds:
-            if "panto" in m.get("name","").lower():
-                st.info(f"RAW from Supabase — name={m['name']} | date_prescribed={repr(m.get('date_prescribed'))} | duration={repr(m.get('duration'))}")
         for m in meds:
             stale=is_stale(m.get("date_prescribed"),90)
             tag='<span class="tag-stale">⚠️ POSSIBLY STALE</span>' if stale else '<span class="tag-verified">✓ VERIFIED</span>'
@@ -528,8 +524,6 @@ elif "Medications" in page:
             _date = str(m.get("date_prescribed") or "").strip()
             if _date in ("None","none","null",""): _date = ""
             course_status = get_course_status(_date, _dur) if _date and _dur else None
-            # FINAL DEBUG
-            st.caption(f"CS: name={m.get('name')} _date={repr(_date)} _dur={repr(_dur)} status={course_status}")
             course_tag = ""
             course_warning = ""
             if course_status is not None:
