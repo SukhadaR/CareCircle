@@ -11,6 +11,10 @@ import uuid
 from datetime import datetime, date
 from supabase import create_client
 import hashlib
+try:
+    from twilio.rest import Client as TwilioClient
+    TWILIO_AVAILABLE = True
+except: TWILIO_AVAILABLE = False
 
 st.set_page_config(page_title="CareCircle", page_icon="🔵", layout="wide", initial_sidebar_state="expanded")
 # v2.1
@@ -533,6 +537,57 @@ def classify_and_sanitize(text, profile_summary=""):
     )
     return safe, True
 
+def send_whatsapp(to_number, message_body):
+    """Send WhatsApp notification via Twilio."""
+    if not TWILIO_AVAILABLE: return False, "Twilio not installed"
+    sid   = st.secrets.get("TWILIO_SID", "")
+    token = st.secrets.get("TWILIO_TOKEN", "")
+    from_ = st.secrets.get("TWILIO_FROM", "whatsapp:+14155238886")
+    if not sid or not token: return False, "Twilio credentials not set"
+    try:
+        client = TwilioClient(sid, token)
+        to = f"whatsapp:+{to_number.replace('+','').replace(' ','')}"
+        client.messages.create(from_=from_, to=to, body=message_body)
+        return True, "Sent"
+    except Exception as e:
+        return False, str(e)
+
+def build_whatsapp_alerts(meds, appointments, patient_name):
+    NL = "\n"
+    alerts = []
+    pn = patient_name
+    for m in meds:
+        supply = get_supply_info(m.get("date_ingested"), m.get("tablets_remaining"), m.get("tablets_per_day"))
+        if supply:
+            dl = supply["days_left"]
+            nm = m["name"]
+            hdr = "🔵 *CareCircle*" + NL + NL
+            if dl <= 0: alerts.append(hdr + pn + "'s *" + nm + "* has RUN OUT. Order immediately.")
+            elif dl <= 3: alerts.append(hdr + pn + "'s *" + nm + "* runs out in " + str(dl) + " day(s). Order today.")
+            elif dl <= 7: alerts.append(hdr + pn + "'s *" + nm + "* runs out in " + str(dl) + " days. Plan refill.")
+    for a in appointments:
+        if a.get("status") == "done": continue
+        du = days_until(a.get("appointment_date"))
+        dr = a.get("doctor_role", "Doctor")
+        ad = a.get("appointment_date", "")
+        hdr = "🔵 *CareCircle*" + NL + NL
+        if du is None: continue
+        if du == 0: alerts.append(hdr + pn + "'s " + dr + " appointment is TODAY.")
+        elif du == 1: alerts.append(hdr + pn + "'s " + dr + " appointment is TOMORROW (" + ad + ").")
+        elif du == 3: alerts.append(hdr + pn + "'s " + dr + " appointment in 3 days (" + ad + ").")
+        checklist = a.get("pre_checklist") or {}
+        if checklist.get("blood_test") and du and 1 <= du <= 5:
+            alerts.append(hdr + "Blood test needed before " + pn + "'s " + dr + " visit in " + str(du) + " day(s). Scheduled?")
+    for m in meds:
+        _dur = str(m.get("duration") or "").strip()
+        _date = str(m.get("date_prescribed") or "").strip()
+        hdr = "🔵 *CareCircle*" + NL + NL
+        if _dur and _date:
+            s = get_course_status(_date, _dur)
+            mn = m.get("name", "medication")
+            if s == 0: alerts.append(hdr + pn + "'s " + mn + " course ends TODAY. Check with doctor.")
+            elif s and -2 <= s < 0: alerts.append(hdr + pn + "'s " + mn + " course ended " + str(abs(s)) + " day(s) ago. Verify with doctor.")
+    return alerts
 def parse_json_response(text):
     raw = text.strip()
     if "```" in raw:
@@ -738,7 +793,30 @@ if "Daily Briefing" in page:
             else: st.warning(_n["message"])
     else:
         st.success("✅ No urgent alerts right now — everything is on track.")
-    st.caption("📲 Next version: these fire as SMS via Twilio even when app is closed.")
+    st.caption("📲 These fire as WhatsApp via Twilio.")
+
+    # WhatsApp send button
+    if st.secrets.get("TWILIO_SID"):
+        st.markdown("---")
+        st.markdown("#### 📱 Send WhatsApp Alerts Now")
+        wa_number = st.text_input("Meera's WhatsApp number", placeholder="919158750962", help="Enter number with country code, no +")
+        if st.button("📤 Send WhatsApp Alerts", type="primary", use_container_width=True):
+            if wa_number:
+                _appts = db_get_appointments(st.session_state.active_profile_id)
+                wa_alerts = build_whatsapp_alerts(meds, _appts, active_profile["name"])
+                if wa_alerts:
+                    sent = 0
+                    for alert in wa_alerts:
+                        ok, msg = send_whatsapp(wa_number, alert)
+                        if ok: sent += 1
+                    if sent > 0:
+                        st.success(f"✅ {sent} WhatsApp alert(s) sent to +{wa_number}")
+                    else:
+                        st.error("Failed to send. Check Twilio credentials in secrets.")
+                else:
+                    st.info("No urgent alerts to send right now.")
+            else:
+                st.warning("Please enter a WhatsApp number.")
 
     st.markdown("---")
     st.markdown("#### 🚨 Emergency")
