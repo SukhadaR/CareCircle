@@ -125,15 +125,7 @@ def show_login_page():
                 else:
                     st.warning("Please enter email and password")
 
-            st.markdown("---")
-            google_url = get_google_oauth_url()
-            if google_url:
-                st.markdown(f"""
-                <a href="{google_url}" target="_self">
-                <button style="width:100%;padding:10px;background:white;border:1px solid #ddd;border-radius:8px;cursor:pointer;font-size:14px;font-family:Arial;">
-                    🔵 Continue with Google
-                </button>
-                </a>""", unsafe_allow_html=True)
+
 
         with tab2:
             st.markdown("#### Create your account")
@@ -155,15 +147,7 @@ def show_login_page():
                     else:
                         st.error(f"Sign up failed — {err}")
 
-            st.markdown("---")
-            google_url2 = get_google_oauth_url()
-            if google_url2:
-                st.markdown(f"""
-                <a href="{google_url2}" target="_self">
-                <button style="width:100%;padding:10px;background:white;border:1px solid #ddd;border-radius:8px;cursor:pointer;font-size:14px;font-family:Arial;">
-                    🔵 Sign up with Google
-                </button>
-                </a>""", unsafe_allow_html=True)
+
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.caption("CareCircle · Your data is private and encrypted · Not a medical device")
