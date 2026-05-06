@@ -214,36 +214,27 @@ def parse_any_date(date_str):
 
 def get_course_end_date(date_prescribed, duration_str):
     """Parse duration string and return end date."""
-    try:
-        import calendar as cal, re as _re
-        duration_str = str(duration_str or "").strip()
-        date_prescribed = str(date_prescribed or "").strip()
-        if not duration_str or not date_prescribed: return None
-        # Skip ongoing medications
-        dl = duration_str.lower()
-        for skip in ["ongoing","continue","long term","indefinite","chronic","permanent"]:
-            if skip in dl: return None
-        # Parse start date
-        start = parse_any_date(date_prescribed)
-        if not start: return None
-        # Extract days as integer
-        nums = _re.findall(r"\d+", dl)
-        if not nums: return None
-        n = int(nums[0])
-        # Months
-        if "month" in dl:
-            m = start.month + n
-            y = start.year + (m - 1) // 12
-            m = ((m - 1) % 12) + 1
-            d = min(start.day, cal.monthrange(y, m)[1])
-            return date(y, m, d)
-        # Weeks
-        if "week" in dl:
-            return start + timedelta(days=n * 7)
-        # Days (default)
-        return start + timedelta(days=n)
-    except:
-        return None
+    import calendar as cal, re as _re
+    duration_str = str(duration_str or "").strip()
+    date_prescribed = str(date_prescribed or "").strip()
+    if not duration_str or not date_prescribed: return None
+    dl = duration_str.lower()
+    for skip in ["ongoing","continue","long term","indefinite","chronic","permanent"]:
+        if skip in dl: return None
+    start = parse_any_date(date_prescribed)
+    if not start: return None
+    nums = _re.findall(r"\d+", dl)
+    if not nums: return None
+    n = int(nums[0])
+    if "month" in dl:
+        m = start.month + n
+        y = start.year + (m - 1) // 12
+        m = ((m - 1) % 12) + 1
+        d = min(start.day, cal.monthrange(y, m)[1])
+        return date(y, m, d)
+    if "week" in dl:
+        return start + timedelta(days=n * 7)
+    return start + timedelta(days=n)
 
 def get_course_status(date_prescribed, duration_str):
     """Returns: None (ongoing), days_left (int, still active), or days_overdue (negative int)."""
