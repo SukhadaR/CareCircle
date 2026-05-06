@@ -65,33 +65,13 @@ def get_supabase():
     return create_client(url, key)
 
 def restore_session():
-    """Restore session from st.session_state tokens on refresh."""
-    if st.session_state.get("user"):
-        return
-    access = st.session_state.get("_access_token")
-    refresh = st.session_state.get("_refresh_token")
-    if access and refresh:
-        sb = get_supabase()
-        if sb:
-            try:
-                res = sb.auth.set_session(access, refresh)
-                if res and res.user:
-                    st.session_state.user = res.user
-                    if res.session:
-                        st.session_state._access_token = res.session.access_token
-                        st.session_state._refresh_token = res.session.refresh_token
-            except: pass
+    pass  # handled by authenticator
 
 def save_session_cookie(session):
-    """Store tokens in session state."""
-    if session:
-        st.session_state._access_token = session.access_token
-        st.session_state._refresh_token = session.refresh_token
+    pass  # handled by authenticator
 
 def clear_session_cookie():
-    """Clear stored tokens."""
-    st.session_state.pop("_access_token", None)
-    st.session_state.pop("_refresh_token", None)
+    pass  # handled by authenticator
 
 def get_current_user():
     """Get current logged-in user from session state."""
@@ -509,6 +489,46 @@ def days_ago(date_str):
         return f"{diff} days ago"
     except: return str(date_str)
 
+DIAGNOSTIC_PATTERNS = [
+    "could suggest", "may indicate", "might indicate", "could indicate",
+    "suggests ", "indicates ", "consistent with", "sounds like",
+    "looks like", "this could be", "this may be", "this might be",
+    "possibly ", "probably ", "likely a", "likely to be",
+    "kidney", "renal", "cardiac failure", "heart failure",
+    "liver", "hepatic", "diabetic nephropathy", "neuropathy",
+    "differential diagnosis", "rule out", "symptoms of",
+    "signs of", "presentation of", "typical of", "classic for",
+]
+
+SAFE_REPLACEMENT = """I can't interpret what these symptoms might mean — that's something only a doctor can determine safely.
+
+Here's what I can share from the profile:
+{data_summary}
+
+**What to do:** Bring these symptoms to the doctor as soon as possible. Don't wait for the next routine appointment if anything feels urgent.
+
+Would you like help preparing a summary of the profile to share with the doctor?"""
+
+def classify_and_sanitize(text, profile_summary=""):
+    """
+    Post-generation classifier.
+    Scans output for diagnostic language.
+    If found — replaces with safe response.
+    Returns (clean_text, was_flagged).
+    """
+    text_lower = text.lower()
+    flagged = any(pattern in text_lower for pattern in DIAGNOSTIC_PATTERNS)
+
+    if not flagged:
+        return text, False
+
+    # Build a brief data summary from what we know
+    safe = SAFE_REPLACEMENT.format(
+        data_summary="Please check the medications, lab reports, and caregiver updates sections for the most recent information."
+        if not profile_summary else profile_summary
+    )
+    return safe, True
+
 def parse_json_response(text):
     raw = text.strip()
     if "```" in raw:
@@ -550,7 +570,9 @@ Data: {summary}
 Write a warm plain-English daily briefing (max 200 words). Answer: Is {profile["name"]} okay? Anything urgent? One action item?
 Never diagnose. Flag stale data. Tone: caring, calm, direct."""
     response = client.messages.create(model="claude-opus-4-5", max_tokens=400, messages=[{"role":"user","content":PROMPT}])
-    return response.content[0].text.strip()
+    raw = response.content[0].text.strip()
+    clean, _ = classify_and_sanitize(raw)
+    return clean
 
 def generate_crisis_card(profile, meds):
     client = get_ai_client()
@@ -568,9 +590,11 @@ def answer_query(query, profile, meds, labs, updates):
     if not client: return "Please set your API key."
     summary = json.dumps({"patient":profile,"medications":meds,"lab_reports":labs,"caregiver_updates":updates[:5]},indent=2)
     response = client.messages.create(model="claude-opus-4-5", max_tokens=400,
-        system="You are CareCircle, a care coordination assistant — NOT a medical advisor. When Meera describes symptoms: (1) say clearly you cannot interpret symptoms, (2) share only what is in the profile — lab values, medications, existing conditions — with dates, (3) say 'bring these symptoms to the doctor' and stop there. NEVER list possible causes. NEVER name body systems or conditions that might explain symptoms. NEVER speculate. If unsure, say so. Plain English. Under 150 words.",
+        system="You are CareCircle, a care coordination assistant — NOT a medical advisor. When Meera describes symptoms: (1) say clearly you cannot interpret symptoms, (2) share only what is in the profile — lab values, medications, existing conditions — with dates, (3) say bring these symptoms to the doctor and stop there. NEVER list possible causes. NEVER name body systems or conditions that might explain symptoms. NEVER speculate. Plain English. Under 150 words.",
         messages=[{"role":"user","content":f"Profile:\n{summary}\n\nQuestion: {query}"}])
-    return response.content[0].text.strip()
+    raw = response.content[0].text.strip()
+    clean, flagged = classify_and_sanitize(raw)
+    return clean, flagged
 
 def detect_crisis(q):
     return any(k in q.lower() for k in ["chest pain","heart attack","not breathing","unconscious","fainted","collapsed","stroke","emergency","ambulance","fell down","not responding"])
@@ -1109,7 +1133,9 @@ elif "Ask" in page:
         else:
             if st.button("Ask",type="primary"):
                 with st.spinner("Checking profile..."):
-                    answer=answer_query(query,active_profile,meds,labs,updates)
+                    answer, flagged = answer_query(query,active_profile,meds,labs,updates)
+                if flagged:
+                    st.caption("⚠️ This response was reviewed — diagnostic language was detected and replaced with safe guidance.")
                 st.markdown(f'''<div class="briefing-box">{answer}</div>''',unsafe_allow_html=True)
     st.markdown("---"); st.markdown("**Example questions:**")
     [st.markdown(f"  · _{e}_") for e in [f"What medications is {active_profile['name']} on?","When was the last lab report?","What did the caregiver say today?","Are any prescriptions out of date?","Is there anything urgent?"]]
