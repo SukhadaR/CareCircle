@@ -150,41 +150,45 @@ def show_login_page():
 
         with tab1:
             st.markdown("#### Welcome back")
-            email = st.text_input("Email", key="login_email", placeholder="meera@example.com")
-            password = st.text_input("Password", type="password", key="login_password")
-            if st.button("Sign In", type="primary", use_container_width=True):
-                if email and password:
-                    with st.spinner("Signing in..."):
-                        user, err = login_email(email, password)
-                    if user:
-                        st.session_state.user = user
-                        st.rerun()
+            with st.form("login_form"):
+                email = st.text_input("Email", placeholder="meera@example.com")
+                password = st.text_input("Password", type="password")
+                submitted = st.form_submit_button("Sign In", type="primary", use_container_width=True)
+                if submitted:
+                    if email and password:
+                        with st.spinner("Signing in..."):
+                            user, err = login_email(email, password)
+                        if user:
+                            st.session_state.user = user
+                            st.rerun()
+                        else:
+                            st.error(f"Sign in failed — {err}")
                     else:
-                        st.error(f"Sign in failed — {err}")
-                else:
-                    st.warning("Please enter email and password")
+                        st.warning("Please enter email and password")
 
 
 
         with tab2:
             st.markdown("#### Create your account")
-            new_email = st.text_input("Email", key="signup_email", placeholder="meera@example.com")
-            new_password = st.text_input("Password", type="password", key="signup_password", help="At least 6 characters")
-            new_password2 = st.text_input("Confirm password", type="password", key="signup_password2")
-            if st.button("Create Account", type="primary", use_container_width=True):
-                if not new_email or not new_password:
-                    st.warning("Please fill in all fields")
-                elif new_password != new_password2:
-                    st.error("Passwords don't match")
-                elif len(new_password) < 6:
-                    st.error("Password must be at least 6 characters")
-                else:
-                    with st.spinner("Creating account..."):
-                        user, err = signup_email(new_email, new_password)
-                    if user:
-                        st.success("Account created! Please check your email to confirm, then sign in.")
+            with st.form("signup_form"):
+                new_email = st.text_input("Email", placeholder="meera@example.com")
+                new_password = st.text_input("Password", type="password", help="At least 6 characters")
+                new_password2 = st.text_input("Confirm password", type="password")
+                submitted2 = st.form_submit_button("Create Account", type="primary", use_container_width=True)
+                if submitted2:
+                    if not new_email or not new_password:
+                        st.warning("Please fill in all fields")
+                    elif new_password != new_password2:
+                        st.error("Passwords don't match")
+                    elif len(new_password) < 6:
+                        st.error("Password must be at least 6 characters")
                     else:
-                        st.error(f"Sign up failed — {err}")
+                        with st.spinner("Creating account..."):
+                            user, err = signup_email(new_email, new_password)
+                        if user:
+                            st.success("✅ Account created! Please check your email to confirm, then sign in.")
+                        else:
+                            st.error(f"Sign up failed — {err}")
 
 
 
@@ -718,7 +722,8 @@ if "Daily Briefing" in page:
 
 elif "Medications" in page:
     st.markdown(f"### 💊 {active_profile['name']}'s Medications")
-    with st.expander("➕ Upload a new prescription", expanded=not meds):
+    upload_done = st.session_state.pop("upload_done", False)
+    with st.expander("➕ Upload a new prescription", expanded=(not meds and not upload_done)):
         uploaded = st.file_uploader("Upload prescription photo", type=["jpg","jpeg","png","webp"])
         if uploaded:
             st.image(uploaded, caption="Uploaded prescription", width=400)
@@ -762,6 +767,7 @@ elif "Medications" in page:
                             if skipped: msgs.append(f"ℹ️ {skipped} medication(s) skipped — already in profile: {', '.join([n for n in extracted_names if 'already exists' in n])}")
                             if result.get("document_notes"): msgs.append(f"📋 {result['document_notes']}")
                             st.session_state["upload_msgs"] = msgs
+                            st.session_state["upload_done"] = True
                             st.rerun()
     if st.session_state.get("upload_msgs"):
         for msg in st.session_state["upload_msgs"]:
