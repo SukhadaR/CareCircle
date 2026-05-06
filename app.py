@@ -17,6 +17,20 @@ st.set_page_config(page_title="CareCircle", page_icon="🔵", layout="wide", ini
 
 st.markdown("""
 <style>
+/* Hide browser native password reveal button */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear,
+input[type="password"]::-webkit-contacts-auto-fill-button,
+input[type="password"]::-webkit-credentials-auto-fill-button {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<style>
     .main { background-color: #f8f9fa; }
     .cc-header { background: linear-gradient(135deg, #1E3A5F 0%, #2E75B6 100%); padding: 24px 28px; border-radius: 12px; margin-bottom: 24px; color: white; }
     .cc-header h1 { margin: 0; font-size: 28px; font-weight: 700; }
