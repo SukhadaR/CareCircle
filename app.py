@@ -11,7 +11,6 @@ import uuid
 from datetime import datetime, date
 from supabase import create_client
 import hashlib
-import extra_streamlit_components as stx
 
 st.set_page_config(page_title="CareCircle", page_icon="🔵", layout="wide", initial_sidebar_state="expanded")
 # v2.1
@@ -51,40 +50,34 @@ def get_supabase():
         return None
     return create_client(url, key)
 
-def get_cookie_manager():
-    return stx.CookieManager(key="carecircle_cookies")
-
 def restore_session():
-    """Restore Supabase session from cookie on page refresh."""
+    """Restore session from st.session_state tokens on refresh."""
     if st.session_state.get("user"):
-        return  # Already logged in
-    try:
-        cm = get_cookie_manager()
-        refresh_token = cm.get("cc_refresh_token")
-        access_token = cm.get("cc_access_token")
-        if refresh_token and access_token:
-            sb = get_supabase()
-            if sb:
-                res = sb.auth.set_session(access_token, refresh_token)
+        return
+    access = st.session_state.get("_access_token")
+    refresh = st.session_state.get("_refresh_token")
+    if access and refresh:
+        sb = get_supabase()
+        if sb:
+            try:
+                res = sb.auth.set_session(access, refresh)
                 if res and res.user:
                     st.session_state.user = res.user
-    except: pass
+                    if res.session:
+                        st.session_state._access_token = res.session.access_token
+                        st.session_state._refresh_token = res.session.refresh_token
+            except: pass
 
 def save_session_cookie(session):
-    """Save session tokens to cookie for persistence."""
-    try:
-        cm = get_cookie_manager()
-        cm.set("cc_refresh_token", session.refresh_token, max_age=60*60*24*30)
-        cm.set("cc_access_token", session.access_token, max_age=60*60*24*30)
-    except: pass
+    """Store tokens in session state."""
+    if session:
+        st.session_state._access_token = session.access_token
+        st.session_state._refresh_token = session.refresh_token
 
 def clear_session_cookie():
-    """Clear session cookies on logout."""
-    try:
-        cm = get_cookie_manager()
-        cm.delete("cc_refresh_token")
-        cm.delete("cc_access_token")
-    except: pass
+    """Clear stored tokens."""
+    st.session_state.pop("_access_token", None)
+    st.session_state.pop("_refresh_token", None)
 
 def get_current_user():
     """Get current logged-in user from session state."""
@@ -150,45 +143,41 @@ def show_login_page():
 
         with tab1:
             st.markdown("#### Welcome back")
-            with st.form("login_form"):
-                email = st.text_input("Email", placeholder="meera@example.com")
-                password = st.text_input("Password", type="password")
-                submitted = st.form_submit_button("Sign In", type="primary", use_container_width=True)
-                if submitted:
-                    if email and password:
-                        with st.spinner("Signing in..."):
-                            user, err = login_email(email, password)
-                        if user:
-                            st.session_state.user = user
-                            st.rerun()
-                        else:
-                            st.error(f"Sign in failed — {err}")
+            li_email = st.text_input("Email", key="li_email", placeholder="meera@example.com")
+            li_pass = st.text_input("Password", key="li_pass", type="password")
+            if st.button("Sign In", type="primary", use_container_width=True, key="li_btn"):
+                if li_email and li_pass:
+                    with st.spinner("Signing in..."):
+                        user, err = login_email(li_email, li_pass)
+                    if user:
+                        st.session_state.user = user
+                        st.rerun()
                     else:
-                        st.warning("Please enter email and password")
+                        st.error(f"Sign in failed — {err}")
+                else:
+                    st.warning("Please enter email and password")
 
 
 
         with tab2:
             st.markdown("#### Create your account")
-            with st.form("signup_form"):
-                new_email = st.text_input("Email", placeholder="meera@example.com")
-                new_password = st.text_input("Password", type="password", help="At least 6 characters")
-                new_password2 = st.text_input("Confirm password", type="password")
-                submitted2 = st.form_submit_button("Create Account", type="primary", use_container_width=True)
-                if submitted2:
-                    if not new_email or not new_password:
-                        st.warning("Please fill in all fields")
-                    elif new_password != new_password2:
-                        st.error("Passwords don't match")
-                    elif len(new_password) < 6:
-                        st.error("Password must be at least 6 characters")
+            su_email = st.text_input("Email", key="su_email", placeholder="meera@example.com")
+            su_pass = st.text_input("Password", key="su_pass", type="password", help="At least 6 characters")
+            su_pass2 = st.text_input("Confirm password", key="su_pass2", type="password")
+            if st.button("Create Account", type="primary", use_container_width=True, key="su_btn"):
+                if not su_email or not su_pass:
+                    st.warning("Please fill in all fields")
+                elif su_pass != su_pass2:
+                    st.error("Passwords don't match")
+                elif len(su_pass) < 6:
+                    st.error("Password must be at least 6 characters")
+                else:
+                    with st.spinner("Creating account..."):
+                        user, err = signup_email(su_email, su_pass)
+                    if user:
+                        st.success("✅ Account created! Please check your email to confirm, then sign in.")
                     else:
-                        with st.spinner("Creating account..."):
-                            user, err = signup_email(new_email, new_password)
-                        if user:
-                            st.success("✅ Account created! Please check your email to confirm, then sign in.")
-                        else:
-                            st.error(f"Sign up failed — {err}")
+                        st.error(f"Sign up failed — {err}")
 
 
 
