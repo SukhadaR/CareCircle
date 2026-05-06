@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, date
 from supabase import create_client
 import hashlib
+import extra_streamlit_components as stx
 
 st.set_page_config(page_title="CareCircle", page_icon="🔵", layout="wide", initial_sidebar_state="expanded")
 # v2.1
@@ -50,6 +51,41 @@ def get_supabase():
         return None
     return create_client(url, key)
 
+def get_cookie_manager():
+    return stx.CookieManager(key="carecircle_cookies")
+
+def restore_session():
+    """Restore Supabase session from cookie on page refresh."""
+    if st.session_state.get("user"):
+        return  # Already logged in
+    try:
+        cm = get_cookie_manager()
+        refresh_token = cm.get("cc_refresh_token")
+        access_token = cm.get("cc_access_token")
+        if refresh_token and access_token:
+            sb = get_supabase()
+            if sb:
+                res = sb.auth.set_session(access_token, refresh_token)
+                if res and res.user:
+                    st.session_state.user = res.user
+    except: pass
+
+def save_session_cookie(session):
+    """Save session tokens to cookie for persistence."""
+    try:
+        cm = get_cookie_manager()
+        cm.set("cc_refresh_token", session.refresh_token, max_age=60*60*24*30)
+        cm.set("cc_access_token", session.access_token, max_age=60*60*24*30)
+    except: pass
+
+def clear_session_cookie():
+    """Clear session cookies on logout."""
+    try:
+        cm = get_cookie_manager()
+        cm.delete("cc_refresh_token")
+        cm.delete("cc_access_token")
+    except: pass
+
 def get_current_user():
     """Get current logged-in user from session state."""
     return st.session_state.get("user", None)
@@ -59,6 +95,8 @@ def login_email(email, password):
     if not sb: return None, "No database connection"
     try:
         res = sb.auth.sign_in_with_password({"email": email, "password": password})
+        if res.session:
+            save_session_cookie(res.session)
         return res.user, None
     except Exception as e:
         return None, str(e)
@@ -77,6 +115,7 @@ def logout():
     if sb:
         try: sb.auth.sign_out()
         except: pass
+    clear_session_cookie()
     st.session_state.pop("user", None)
     st.session_state.pop("active_profile_id", None)
     st.session_state.pop("briefing", None)
@@ -534,6 +573,9 @@ for key in ["active_profile_id","pending_confirmations","briefing","crisis_mode"
         st.session_state[key] = None if key in ["active_profile_id","briefing","interaction_result","user"] else (False if key in ["crisis_mode","show_new_profile"] else [])
 
 # ── AUTH GATE ─────────────────────────────────────────────────────────────────
+# Try to restore session from cookie first
+restore_session()
+
 # Check for OAuth callback token in URL
 if not st.session_state.get("user"):
     # Check if returning from Google OAuth
