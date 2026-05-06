@@ -352,14 +352,18 @@ def db_delete_caregiver_update(update_id):
 def db_save_prescription(pid, prescription):
     sb = get_supabase()
     if not sb: return
-    try: sb.table("prescriptions").insert({**prescription, "profile_id": pid}).execute()
+    user = st.session_state.get("user")
+    uid = user.id if user and hasattr(user, "id") else None
+    try: sb.table("prescriptions").insert({**prescription, "profile_id": pid, "user_id": uid}).execute()
     except Exception as e: st.error(f"Error saving prescription: {e}")
 
 def db_get_prescriptions(pid):
     sb = get_supabase()
     if not sb: return []
     try: return sb.table("prescriptions").select("*").eq("profile_id", pid).order("created_at", desc=True).execute().data or []
-    except: return []
+    except Exception as e:
+        st.error(f"Error fetching prescriptions: {e}")
+        return []
 
 def db_delete_prescription(prescription_id):
     sb = get_supabase()
