@@ -214,6 +214,7 @@ def parse_any_date(date_str):
 
 def get_course_end_date(date_prescribed, duration_str):
     """Parse duration string and return end date."""
+    from datetime import timedelta, date as dt_date
     import calendar as cal, re as _re
     duration_str = str(duration_str or "").strip()
     date_prescribed = str(date_prescribed or "").strip()
@@ -231,7 +232,7 @@ def get_course_end_date(date_prescribed, duration_str):
         y = start.year + (m - 1) // 12
         m = ((m - 1) % 12) + 1
         d = min(start.day, cal.monthrange(y, m)[1])
-        return date(y, m, d)
+        return dt_date(y, m, d)
     if "week" in dl:
         return start + timedelta(days=n * 7)
     return start + timedelta(days=n)
