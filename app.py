@@ -10,6 +10,7 @@ import json
 import uuid
 from datetime import datetime, date
 from supabase import create_client
+import hashlib
 
 st.set_page_config(page_title="CareCircle", page_icon="🔵", layout="wide", initial_sidebar_state="expanded")
 # v2.1
@@ -49,20 +50,144 @@ def get_supabase():
         return None
     return create_client(url, key)
 
+def get_current_user():
+    """Get current logged-in user from session state."""
+    return st.session_state.get("user", None)
+
+def login_email(email, password):
+    sb = get_supabase()
+    if not sb: return None, "No database connection"
+    try:
+        res = sb.auth.sign_in_with_password({"email": email, "password": password})
+        return res.user, None
+    except Exception as e:
+        return None, str(e)
+
+def signup_email(email, password):
+    sb = get_supabase()
+    if not sb: return None, "No database connection"
+    try:
+        res = sb.auth.sign_up({"email": email, "password": password})
+        return res.user, None
+    except Exception as e:
+        return None, str(e)
+
+def logout():
+    sb = get_supabase()
+    if sb:
+        try: sb.auth.sign_out()
+        except: pass
+    st.session_state.pop("user", None)
+    st.session_state.pop("active_profile_id", None)
+    st.session_state.pop("briefing", None)
+    st.rerun()
+
+def get_google_oauth_url():
+    sb = get_supabase()
+    if not sb: return None
+    try:
+        res = sb.auth.sign_in_with_oauth({
+            "provider": "google",
+            "options": {"redirect_to": st.secrets.get("APP_URL", "https://carecircle-ai.streamlit.app")}
+        })
+        return res.url
+    except Exception as e:
+        return None
+
+def show_login_page():
+    """Show login/signup UI."""
+    st.markdown("""
+    <div style="max-width:420px;margin:60px auto;">
+        <div style="background:linear-gradient(135deg,#1E3A5F,#2E75B6);padding:32px;border-radius:16px;text-align:center;margin-bottom:24px;">
+            <h1 style="color:white;margin:0;font-size:32px;">🔵 CareCircle</h1>
+            <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:14px;">The care ecosystem for your family</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        tab1, tab2 = st.tabs(["Sign In", "Create Account"])
+
+        with tab1:
+            st.markdown("#### Welcome back")
+            email = st.text_input("Email", key="login_email", placeholder="meera@example.com")
+            password = st.text_input("Password", type="password", key="login_password")
+            if st.button("Sign In", type="primary", use_container_width=True):
+                if email and password:
+                    with st.spinner("Signing in..."):
+                        user, err = login_email(email, password)
+                    if user:
+                        st.session_state.user = user
+                        st.rerun()
+                    else:
+                        st.error(f"Sign in failed — {err}")
+                else:
+                    st.warning("Please enter email and password")
+
+            st.markdown("---")
+            google_url = get_google_oauth_url()
+            if google_url:
+                st.markdown(f"""
+                <a href="{google_url}" target="_self">
+                <button style="width:100%;padding:10px;background:white;border:1px solid #ddd;border-radius:8px;cursor:pointer;font-size:14px;font-family:Arial;">
+                    🔵 Continue with Google
+                </button>
+                </a>""", unsafe_allow_html=True)
+
+        with tab2:
+            st.markdown("#### Create your account")
+            new_email = st.text_input("Email", key="signup_email", placeholder="meera@example.com")
+            new_password = st.text_input("Password", type="password", key="signup_password", help="At least 6 characters")
+            new_password2 = st.text_input("Confirm password", type="password", key="signup_password2")
+            if st.button("Create Account", type="primary", use_container_width=True):
+                if not new_email or not new_password:
+                    st.warning("Please fill in all fields")
+                elif new_password != new_password2:
+                    st.error("Passwords don't match")
+                elif len(new_password) < 6:
+                    st.error("Password must be at least 6 characters")
+                else:
+                    with st.spinner("Creating account..."):
+                        user, err = signup_email(new_email, new_password)
+                    if user:
+                        st.success("Account created! Please check your email to confirm, then sign in.")
+                    else:
+                        st.error(f"Sign up failed — {err}")
+
+            st.markdown("---")
+            google_url2 = get_google_oauth_url()
+            if google_url2:
+                st.markdown(f"""
+                <a href="{google_url2}" target="_self">
+                <button style="width:100%;padding:10px;background:white;border:1px solid #ddd;border-radius:8px;cursor:pointer;font-size:14px;font-family:Arial;">
+                    🔵 Sign up with Google
+                </button>
+                </a>""", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.caption("CareCircle · Your data is private and encrypted · Not a medical device")
+
 def db_get_profiles():
     sb = get_supabase()
     if not sb: return []
-    try: return sb.table("profiles").select("*").order("created_at").execute().data or []
+    user = st.session_state.get("user")
+    if not user: return []
+    uid = user.id if hasattr(user, "id") else str(user)
+    try: return sb.table("profiles").select("*").eq("user_id", uid).order("created_at").execute().data or []
     except: return []
 
 def db_create_profile(name, age, conditions, doctors):
     sb = get_supabase()
     if not sb:
-        st.error("❌ Cannot connect to database. Check that SUPABASE_URL and SUPABASE_KEY are set in Streamlit secrets.")
+        st.error("❌ Cannot connect to database.")
         return None
+    user = st.session_state.get("user")
+    if not user: return None
+    uid = user.id if hasattr(user, "id") else str(user)
     pid = str(uuid.uuid4())[:8]
     try:
-        sb.table("profiles").insert({"id": pid, "name": name, "age": age, "conditions": conditions, "doctors": doctors}).execute()
+        sb.table("profiles").insert({"id": pid, "name": name, "age": age, "conditions": conditions, "doctors": doctors, "user_id": uid}).execute()
         return pid
     except Exception as e:
         st.error(f"❌ Database error: {e}")
@@ -77,7 +202,9 @@ def db_get_medications(pid):
 def db_add_medication(pid, med):
     sb = get_supabase()
     if not sb: return
-    try: sb.table("medications").insert({**med, "profile_id": pid}).execute()
+    user = st.session_state.get("user")
+    uid = user.id if user and hasattr(user, "id") else None
+    try: sb.table("medications").insert({**med, "profile_id": pid, "user_id": uid}).execute()
     except Exception as e: st.error(f"Error: {e}")
 
 def db_get_lab_reports(pid):
@@ -89,7 +216,9 @@ def db_get_lab_reports(pid):
 def db_add_lab_report(pid, r):
     sb = get_supabase()
     if not sb: return
-    try: sb.table("lab_reports").insert({**r, "profile_id": pid}).execute()
+    user = st.session_state.get("user")
+    uid = user.id if user and hasattr(user, "id") else None
+    try: sb.table("lab_reports").insert({**r, "profile_id": pid, "user_id": uid}).execute()
     except Exception as e: st.error(f"Error: {e}")
 
 def db_get_caregiver_updates(pid):
@@ -101,7 +230,9 @@ def db_get_caregiver_updates(pid):
 def db_add_caregiver_update(pid, u):
     sb = get_supabase()
     if not sb: return
-    try: sb.table("caregiver_updates").insert({**u, "profile_id": pid}).execute()
+    user = st.session_state.get("user")
+    uid = user.id if user and hasattr(user, "id") else None
+    try: sb.table("caregiver_updates").insert({**u, "profile_id": pid, "user_id": uid}).execute()
     except Exception as e: st.error(f"Error: {e}")
 
 def db_get_alerts(pid):
@@ -257,7 +388,9 @@ def db_get_appointments(pid):
 def db_add_appointment(pid, appt):
     sb = get_supabase()
     if not sb: return
-    try: sb.table("appointments").insert({**appt, "profile_id": pid}).execute()
+    user = st.session_state.get("user")
+    uid = user.id if user and hasattr(user, "id") else None
+    try: sb.table("appointments").insert({**appt, "profile_id": pid, "user_id": uid}).execute()
     except Exception as e: st.error(f"Error: {e}")
 
 def db_update_appointment(appt_id, updates):
@@ -405,19 +538,50 @@ def answer_query(query, profile, meds, labs, updates):
     if not client: return "Please set your API key."
     summary = json.dumps({"patient":profile,"medications":meds,"lab_reports":labs,"caregiver_updates":updates[:5]},indent=2)
     response = client.messages.create(model="claude-opus-4-5", max_tokens=400,
-        system="You are CareCircle. Never diagnose. Always cite source and date. Flag stale/missing data. Plain English. Under 150 words.",
+        system="You are CareCircle, a care coordination assistant — NOT a medical advisor. When Meera describes symptoms: (1) say clearly you cannot interpret symptoms, (2) share only what is in the profile — lab values, medications, existing conditions — with dates, (3) say 'bring these symptoms to the doctor' and stop there. NEVER list possible causes. NEVER name body systems or conditions that might explain symptoms. NEVER speculate. If unsure, say so. Plain English. Under 150 words.",
         messages=[{"role":"user","content":f"Profile:\n{summary}\n\nQuestion: {query}"}])
     return response.content[0].text.strip()
 
 def detect_crisis(q):
     return any(k in q.lower() for k in ["chest pain","heart attack","not breathing","unconscious","fainted","collapsed","stroke","emergency","ambulance","fell down","not responding"])
 
-for key in ["active_profile_id","pending_confirmations","briefing","crisis_mode","interaction_result","show_new_profile"]:
+for key in ["active_profile_id","pending_confirmations","briefing","crisis_mode","interaction_result","show_new_profile","user"]:
     if key not in st.session_state:
-        st.session_state[key] = None if key in ["active_profile_id","briefing","interaction_result"] else (False if key in ["crisis_mode","show_new_profile"] else [])
+        st.session_state[key] = None if key in ["active_profile_id","briefing","interaction_result","user"] else (False if key in ["crisis_mode","show_new_profile"] else [])
+
+# ── AUTH GATE ─────────────────────────────────────────────────────────────────
+# Check for OAuth callback token in URL
+if not st.session_state.get("user"):
+    # Check if returning from Google OAuth
+    params = st.query_params
+    if "code" in params or "access_token" in params:
+        sb = get_supabase()
+        if sb:
+            try:
+                session = sb.auth.get_session()
+                if session and session.user:
+                    st.session_state.user = session.user
+                    st.query_params.clear()
+                    st.rerun()
+            except: pass
+
+if not st.session_state.get("user"):
+    show_login_page()
+    st.stop()
+
+# User is logged in
+_current_user = st.session_state.user
+_user_id = _current_user.id if hasattr(_current_user, 'id') else str(_current_user)
 
 with st.sidebar:
     st.markdown("### 🔵 CareCircle")
+    # Show logged in user
+    user = st.session_state.get("user")
+    if user:
+        email = user.email if hasattr(user, "email") else "Signed in"
+        st.caption(f"👤 {email}")
+        if st.button("Sign out", use_container_width=True):
+            logout()
     st.markdown("---")
     st.markdown("---")
     st.markdown("**Care Profiles**")
