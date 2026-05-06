@@ -536,6 +536,8 @@ elif "Medications" in page:
             _date = str(m.get("date_prescribed") or "").strip()
             if _date in ("None","none","null",""): _date = ""
             course_status = get_course_status(_date, _dur) if _date and _dur else None
+            # FINAL DEBUG
+            st.caption(f"CS: name={m.get('name')} _date={repr(_date)} _dur={repr(_dur)} status={course_status}")
             course_tag = ""
             course_warning = ""
             if course_status is not None:
