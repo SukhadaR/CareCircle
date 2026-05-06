@@ -214,35 +214,36 @@ def parse_any_date(date_str):
 
 def get_course_end_date(date_prescribed, duration_str):
     """Parse duration string and return end date."""
-    import calendar as cal
-    duration_str = duration_str or ""
-    if not date_prescribed or not duration_str.strip(): return None
     try:
+        import calendar as cal, re as _re
+        duration_str = str(duration_str or "").strip()
+        date_prescribed = str(date_prescribed or "").strip()
+        if not duration_str or not date_prescribed: return None
+        # Skip ongoing medications
+        dl = duration_str.lower()
+        for skip in ["ongoing","continue","long term","indefinite","chronic","permanent"]:
+            if skip in dl: return None
+        # Parse start date
         start = parse_any_date(date_prescribed)
         if not start: return None
-        dl = duration_str.lower()
-        # Ongoing — no end date
-        if any(x in dl for x in ["ongoing","continue","long term","indefinite","chronic"]): return None
-        # Extract number of months
-        import re
-        month_match = re.search(r"(\d+)\s*month", dl)
-        if month_match:
-            months = int(month_match.group(1))
-            m = start.month + months
+        # Extract days as integer
+        nums = _re.findall(r"\d+", dl)
+        if not nums: return None
+        n = int(nums[0])
+        # Months
+        if "month" in dl:
+            m = start.month + n
             y = start.year + (m - 1) // 12
             m = ((m - 1) % 12) + 1
             d = min(start.day, cal.monthrange(y, m)[1])
             return date(y, m, d)
-        # Days
-        day_match = re.search(r"(\d+)\s*day", dl)
-        if day_match:
-            return start + timedelta(days=int(day_match.group(1)))
-        # Named periods
-        if any(x in dl for x in ["one week","1 week"]): return start + timedelta(days=7)
-        if any(x in dl for x in ["two week","2 week","fortnight"]): return start + timedelta(days=14)
-        if "30 day" in dl: return start + timedelta(days=30)
+        # Weeks
+        if "week" in dl:
+            return start + timedelta(days=n * 7)
+        # Days (default)
+        return start + timedelta(days=n)
+    except:
         return None
-    except: return None
 
 def get_course_status(date_prescribed, duration_str):
     """Returns: None (ongoing), days_left (int, still active), or days_overdue (negative int)."""
