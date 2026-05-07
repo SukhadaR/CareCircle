@@ -1291,7 +1291,7 @@ elif "Adherence" in page:
         missed = [name for name, taken in med_status.items() if not taken]
 
         a_notes = st.text_input("Notes (optional)", placeholder="e.g. took after dinner instead of before", key="a_notes")
-        logged_by = st.selectbox("Logged by", ["Meera", "Caretaker", "Dad"], key="a_logged_by")
+        logged_by = st.text_input("Logged by", value="Meera", key="a_logged_by", placeholder="Meera / Caretaker / Dad")
 
         if st.button("✅ Save Adherence", type="primary", use_container_width=True):
             if med_status:
