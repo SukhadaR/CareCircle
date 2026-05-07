@@ -780,7 +780,9 @@ with st.sidebar:
         c1.metric("Lab Reports", len(labs)); c2.metric("Updates", len(updates))
         st.markdown("---")
         st.markdown("**Navigation**")
-        page = st.radio("", ["🏠  Daily Briefing","💊  Medications","📄  Prescriptions","🔬  Lab Reports","❤️  Vital Signs","✅  Adherence","🗣️  Caregiver Updates","📅  Appointments","⚠️  Alerts","💬  Ask CareCircle"], label_visibility="collapsed")
+        nav_options = ["🏠  Daily Briefing","💊  Medications","📄  Prescriptions","🔬  Lab Reports","❤️  Vital Signs","✅  Adherence","🗣️  Caregiver Updates","📅  Appointments","⚠️  Alerts","💬  Ask CareCircle"]
+        nav_default = nav_options.index(st.session_state.pop("_nav_override", "🏠  Daily Briefing")) if st.session_state.get("_nav_override") in nav_options else 0
+        page = st.radio("", nav_options, index=nav_default, label_visibility="collapsed")
     else:
         meds=alerts=labs=updates=[]; page="🏠  Daily Briefing"
 
@@ -896,10 +898,55 @@ if "Daily Briefing" in page:
     with c3: st.markdown(f'''<div class="metric-card"><div class="label">Lab Reports</div><div class="value">{len(labs)}</div><div class="sub">{'On file' if labs else 'None uploaded'}</div></div>''',unsafe_allow_html=True)
     with c4: st.markdown(f'''<div class="metric-card"><div class="label">Caregiver Updates</div><div class="value">{len(updates)}</div><div class="sub">{'Recent activity' if updates else 'No updates'}</div></div>''',unsafe_allow_html=True)
     st.markdown("<br>",unsafe_allow_html=True)
-    # Post-onboarding welcome
-    if st.session_state.pop("just_onboarded", False):
-        st.success(f"🎉 Profile created for {active_profile['name']}! Now upload their first prescription to get started.")
-        st.info("👆 Go to **💊 Medications** in the sidebar → Upload a prescription photo → Extract medications → Come back here to generate your first briefing.")
+    # Post-onboarding guided stepper
+    if st.session_state.get("just_onboarded"):
+        st.markdown(f"""
+        <div style="background:#E8F5E9;border:1px solid #A5D6A7;border-radius:12px;padding:20px 24px;margin-bottom:20px">
+            <h3 style="color:#1B5E20;margin:0 0 8px">🎉 Welcome to CareCircle, {active_profile["name"]} is all set up!</h3>
+            <p style="color:#2E7D32;margin:0">Complete these 3 steps to get the most out of CareCircle.</p>
+        </div>""", unsafe_allow_html=True)
+
+        step_cols = st.columns(3)
+        has_meds = len(meds) > 0
+        has_caretaker = len(updates) > 0
+
+        with step_cols[0]:
+            st.markdown(f'''<div style="background:{"#E8F5E9" if True else "#F5F5F5"};border-radius:10px;padding:16px;text-align:center;border:1px solid {"#A5D6A7" if True else "#DDD"}">
+                <div style="font-size:28px">{"✅" if True else "⭕"}</div>
+                <div style="font-weight:700;color:#1E3A5F;margin:6px 0 4px">Step 1</div>
+                <div style="font-size:13px;color:#555">Create profile</div>
+                <div style="font-size:11px;color:#2e7d32;margin-top:4px">Done!</div>
+            </div>''', unsafe_allow_html=True)
+
+        with step_cols[1]:
+            st.markdown(f'''<div style="background:{"#E8F5E9" if has_meds else "#FFF8E1"};border-radius:10px;padding:16px;text-align:center;border:1px solid {"#A5D6A7" if has_meds else "#FFE082"}">
+                <div style="font-size:28px">{"✅" if has_meds else "💊"}</div>
+                <div style="font-weight:700;color:#1E3A5F;margin:6px 0 4px">Step 2</div>
+                <div style="font-size:13px;color:#555">Add first prescription</div>
+                <div style="font-size:11px;color:{"#2e7d32" if has_meds else "#e65100"};margin-top:4px">{"Done!" if has_meds else "Upload a prescription photo"}</div>
+            </div>''', unsafe_allow_html=True)
+            if not has_meds:
+                if st.button("→ Go to Medications", key="onb_meds", use_container_width=True):
+                    st.session_state["_nav_override"] = "💊  Medications"
+                    st.rerun()
+
+        with step_cols[2]:
+            st.markdown(f'''<div style="background:{"#E8F5E9" if has_caretaker else "#F3E5F5"};border-radius:10px;padding:16px;text-align:center;border:1px solid {"#A5D6A7" if has_caretaker else "#CE93D8"}">
+                <div style="font-size:28px">{"✅" if has_caretaker else "🗣️"}</div>
+                <div style="font-weight:700;color:#1E3A5F;margin:6px 0 4px">Step 3</div>
+                <div style="font-size:13px;color:#555">Log first caretaker update</div>
+                <div style="font-size:11px;color:{"#2e7d32" if has_caretaker else "#6a1b9a"};margin-top:4px">{"Done!" if has_caretaker else "Add what the caretaker reported today"}</div>
+            </div>''', unsafe_allow_html=True)
+            if not has_caretaker:
+                if st.button("→ Go to Caretaker Updates", key="onb_care", use_container_width=True):
+                    st.session_state["_nav_override"] = "🗣️  Caregiver Updates"
+                    st.rerun()
+
+        if has_meds and has_caretaker:
+            st.session_state.pop("just_onboarded", None)
+            st.success("🎉 All set up! Generate your first briefing below.")
+        else:
+            st.markdown("---")
 
     if st.button("🔄 Generate Today's Briefing", use_container_width=True, type="primary"):
         with st.spinner("Generating briefing..."):
