@@ -473,6 +473,35 @@ def days_until(date_str):
         return (d - date.today()).days
     except: return None
 
+def db_add_vital(pid, vital):
+    sb = get_supabase()
+    if not sb: return
+    user = st.session_state.get("user")
+    uid = user.id if user and hasattr(user, "id") else None
+    try: sb.table("vital_signs").insert({**vital, "profile_id": pid, "user_id": uid}).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def db_get_vitals(pid):
+    sb = get_supabase()
+    if not sb: return []
+    try: return sb.table("vital_signs").select("*").eq("profile_id", pid).order("date", desc=True).execute().data or []
+    except: return []
+
+def db_delete_vital(vid):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("vital_signs").delete().eq("id", vid).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
+def get_vital_trend(vitals, field, days=7):
+    """Check if a vital sign is trending up over last N days."""
+    recent = [v for v in vitals if v.get(field)][:days]
+    if len(recent) < 3: return None, None
+    vals = [v[field] for v in recent]
+    avg = sum(vals) / len(vals)
+    trend = "up" if vals[0] > vals[-1] else "down" if vals[0] < vals[-1] else "stable"
+    return avg, trend
+
 def get_ai_client():
     key = st.session_state.get("api_key", "") or st.secrets.get("ANTHROPIC_API_KEY", "")
     if not key: return None
@@ -723,7 +752,7 @@ with st.sidebar:
         c1.metric("Lab Reports", len(labs)); c2.metric("Updates", len(updates))
         st.markdown("---")
         st.markdown("**Navigation**")
-        page = st.radio("", ["🏠  Daily Briefing","💊  Medications","📄  Prescriptions","🔬  Lab Reports","🗣️  Caregiver Updates","📅  Appointments","⚠️  Alerts","💬  Ask CareCircle"], label_visibility="collapsed")
+        page = st.radio("", ["🏠  Daily Briefing","💊  Medications","📄  Prescriptions","🔬  Lab Reports","❤️  Vital Signs","🗣️  Caregiver Updates","📅  Appointments","⚠️  Alerts","💬  Ask CareCircle"], label_visibility="collapsed")
     else:
         meds=alerts=labs=updates=[]; page="🏠  Daily Briefing"
 
@@ -1052,6 +1081,125 @@ elif "Lab Reports" in page:
             with col_del:
                 if st.button("🗑️", key=f"del_lab_{r['id']}", help="Delete this report"):
                     db_delete_lab_report(r["id"]); st.rerun()
+
+elif "Vital Signs" in page:
+    st.markdown(f"### ❤️ {active_profile['name']}'s Vital Signs")
+    st.markdown("Log daily readings. The system tracks trends and flags anything worth noting.")
+
+    vitals = db_get_vitals(st.session_state.active_profile_id)
+
+    # Trend summary at top if data exists
+    if vitals:
+        col1, col2, col3, col4 = st.columns(4)
+        # BP trend
+        bp_vals = [v for v in vitals if v.get("bp_systolic")][:7]
+        if bp_vals:
+            latest_bp = bp_vals[0]
+            bp_str = f"{latest_bp['bp_systolic']}/{latest_bp['bp_diastolic']}"
+            bp_color = "#cc0000" if latest_bp['bp_systolic'] > 140 else "#2e7d32"
+            with col1:
+                st.markdown(f"""<div class="metric-card">
+                    <div class="label">Blood Pressure</div>
+                    <div class="value" style="color:{bp_color};font-size:22px">{bp_str}</div>
+                    <div class="sub">{days_ago(latest_bp.get('date'))}</div>
+                </div>""", unsafe_allow_html=True)
+        # Blood sugar trend
+        bs_vals = [v for v in vitals if v.get("blood_sugar")][:7]
+        if bs_vals:
+            latest_bs = bs_vals[0]
+            bs_color = "#cc0000" if latest_bs['blood_sugar'] > 140 else "#2e7d32"
+            with col2:
+                st.markdown(f"""<div class="metric-card">
+                    <div class="label">Blood Sugar</div>
+                    <div class="value" style="color:{bs_color}">{latest_bs['blood_sugar']} mg/dL</div>
+                    <div class="sub">{latest_bs.get('blood_sugar_type','')}, {days_ago(latest_bs.get('date'))}</div>
+                </div>""", unsafe_allow_html=True)
+        # Heart rate
+        hr_vals = [v for v in vitals if v.get("heart_rate")][:7]
+        if hr_vals:
+            latest_hr = hr_vals[0]
+            with col3:
+                st.markdown(f"""<div class="metric-card">
+                    <div class="label">Heart Rate</div>
+                    <div class="value">{latest_hr['heart_rate']} bpm</div>
+                    <div class="sub">{days_ago(latest_hr.get('date'))}</div>
+                </div>""", unsafe_allow_html=True)
+        # Weight
+        wt_vals = [v for v in vitals if v.get("weight")][:7]
+        if wt_vals:
+            latest_wt = wt_vals[0]
+            with col4:
+                st.markdown(f"""<div class="metric-card">
+                    <div class="label">Weight</div>
+                    <div class="value">{latest_wt['weight']} kg</div>
+                    <div class="sub">{days_ago(latest_wt.get('date'))}</div>
+                </div>""", unsafe_allow_html=True)
+
+        # Trend alerts
+        st.markdown("<br>", unsafe_allow_html=True)
+        if len(bp_vals) >= 3:
+            high_bp = [v for v in bp_vals[:3] if v.get("bp_systolic", 0) > 140]
+            if len(high_bp) >= 3:
+                st.error(f"🔴 Blood pressure has been high for 3 or more consecutive readings. Worth discussing with the doctor.")
+        if len(bs_vals) >= 3:
+            high_bs = [v for v in bs_vals[:3] if v.get("blood_sugar", 0) > 160]
+            if len(high_bs) >= 3:
+                st.error(f"🔴 Blood sugar above 160 mg/dL for 3 or more consecutive readings. Worth discussing with the doctor.")
+
+    # Log new reading
+    with st.expander("➕ Log today's readings", expanded=not vitals):
+        st.caption("Log what the caretaker measures or what Dad reports.")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            v_date = st.date_input("Date", value=date.today(), key="v_date")
+            bp_sys = st.number_input("BP Systolic (mmHg)", min_value=0, max_value=300, value=0, step=1, key="bp_sys")
+            bp_dia = st.number_input("BP Diastolic (mmHg)", min_value=0, max_value=200, value=0, step=1, key="bp_dia")
+        with c2:
+            blood_sugar = st.number_input("Blood Sugar (mg/dL)", min_value=0, max_value=600, value=0, step=1, key="bs_val")
+            bs_type = st.selectbox("Blood sugar type", ["Fasting", "Post-meal", "Random", "Before bed"], key="bs_type")
+            heart_rate = st.number_input("Heart rate (bpm)", min_value=0, max_value=300, value=0, step=1, key="hr_val")
+        with c3:
+            weight = st.number_input("Weight (kg)", min_value=0.0, max_value=300.0, value=0.0, step=0.5, key="wt_val")
+            v_notes = st.text_area("Notes", placeholder="Any observations...", key="v_notes", height=80)
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("➕ Save Reading", type="primary", use_container_width=True):
+                entry = {
+                    "id": str(uuid.uuid4())[:8],
+                    "date": str(v_date),
+                    "date_ingested": datetime.now().strftime("%Y-%m-%d"),
+                    "notes": v_notes
+                }
+                if bp_sys > 0: entry["bp_systolic"] = bp_sys
+                if bp_dia > 0: entry["bp_diastolic"] = bp_dia
+                if blood_sugar > 0:
+                    entry["blood_sugar"] = blood_sugar
+                    entry["blood_sugar_type"] = bs_type
+                if heart_rate > 0: entry["heart_rate"] = heart_rate
+                if weight > 0: entry["weight"] = weight
+                db_add_vital(st.session_state.active_profile_id, entry)
+                st.success("✅ Reading saved.")
+                st.rerun()
+
+    # History table
+    if vitals:
+        st.markdown(f"#### History ({len(vitals)} readings)")
+        for v in vitals:
+            parts = []
+            if v.get("bp_systolic"): parts.append(f"BP: {v['bp_systolic']}/{v.get('bp_diastolic','?')} mmHg")
+            if v.get("blood_sugar"): parts.append(f"Sugar: {v['blood_sugar']} mg/dL ({v.get('blood_sugar_type','')})")
+            if v.get("heart_rate"): parts.append(f"HR: {v['heart_rate']} bpm")
+            if v.get("weight"): parts.append(f"Weight: {v['weight']} kg")
+            reading_str = "  |  ".join(parts) if parts else "No readings recorded"
+            col_v, col_del = st.columns([10,1])
+            with col_v:
+                st.markdown(f"""<div class="med-card">
+                    <div class="mname">{v.get('date','')} &nbsp; <span style="font-weight:400;font-size:14px">{reading_str}</span></div>
+                    {f'<div class="msrc">Note: {v["notes"]}</div>' if v.get('notes') else ''}
+                </div>""", unsafe_allow_html=True)
+            with col_del:
+                if st.button("🗑️", key=f"del_v_{v['id']}"):
+                    db_delete_vital(v["id"])
+                    st.rerun()
 
 elif "Caregiver" in page:
     st.markdown(f"### 🗣️ Caregiver Updates for {active_profile['name']}")
