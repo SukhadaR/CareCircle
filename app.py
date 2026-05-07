@@ -475,11 +475,18 @@ def days_until(date_str):
 
 def db_add_vital(pid, vital):
     sb = get_supabase()
-    if not sb: return
+    if not sb:
+        st.error("No Supabase connection")
+        return
     user = st.session_state.get("user")
     uid = user.id if user and hasattr(user, "id") else None
-    try: sb.table("vital_signs").insert({**vital, "profile_id": pid, "user_id": uid}).execute()
-    except Exception as e: st.error(f"Error: {e}")
+    try:
+        data = {**vital, "profile_id": pid, "user_id": uid}
+        st.write(f"DEBUG inserting: {list(data.keys())} to vital_signs")
+        result = sb.table("vital_signs").insert(data).execute()
+        st.write(f"DEBUG result: {result.data}")
+    except Exception as e:
+        st.error(f"Insert error: {e}")
 
 def db_get_vitals(pid):
     sb = get_supabase()
