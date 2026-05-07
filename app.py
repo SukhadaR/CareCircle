@@ -812,8 +812,71 @@ if st.session_state.show_new_profile:
     st.stop()
 
 if not st.session_state.active_profile_id:
-    st.markdown('''<div class="cc-header"><h1>🔵 CareCircle</h1><p>Keeping families informed, so they can be family — not coordinators.</p></div>''', unsafe_allow_html=True)
-    st.info("👈 Click **Add new profile** in the sidebar to get started." if not profiles else "👈 Select a profile from the sidebar.")
+    if not profiles:
+        # ── ONBOARDING ────────────────────────────────────────────
+        st.markdown('''<div class="cc-header">
+            <h1>🔵 Welcome to CareCircle</h1>
+            <p>The care ecosystem for your family. Let's get you set up in 2 minutes.</p>
+        </div>''', unsafe_allow_html=True)
+
+        st.markdown("### Let's create your first care profile")
+        st.markdown("A care profile is for the person you're looking after — your dad, mum, or any family member.")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("#### 👤 About them")
+            ob_name = st.text_input("Their name (how you refer to them)", placeholder="Dad / Mum / Nana")
+            ob_age  = st.number_input("Their age", min_value=1, max_value=120, value=65)
+            ob_cond = st.multiselect("Known health conditions",
+                ["Type 2 Diabetes","Hypertension","Heart Disease","Post-cardiac episode",
+                 "Kidney Disease","Arthritis","COPD","Hypothyroidism","Asthma","Other"])
+        with col2:
+            st.markdown("#### 🏥 Their doctors")
+            st.caption("Add the doctors they see regularly. You can add more later.")
+            d1r = st.text_input("Doctor 1 — role", placeholder="Cardiologist")
+            d1h = st.text_input("Doctor 1 — hospital", placeholder="Fortis Hospital, Lucknow")
+            d2r = st.text_input("Doctor 2 — role", placeholder="Endocrinologist")
+            d2h = st.text_input("Doctor 2 — hospital", placeholder="Apollo Hospital, Lucknow")
+
+        st.markdown("---")
+
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.markdown("**Step 1** — Create profile")
+            st.caption("You are here")
+        with col_b:
+            st.markdown("**Step 2** — Upload first prescription")
+            st.caption("Takes 30 seconds")
+        with col_c:
+            st.markdown("**Step 3** — Generate your first briefing")
+            st.caption("See CareCircle in action")
+
+        st.markdown("---")
+
+        if st.button("🚀 Create profile and get started", type="primary", use_container_width=True):
+            if ob_name:
+                doctors = []
+                if d1r: doctors.append({"role": d1r, "hospital": d1h})
+                if d2r: doctors.append({"role": d2r, "hospital": d2h})
+                pid = db_create_profile(ob_name, ob_age, ob_cond, doctors)
+                if pid:
+                    st.session_state.active_profile_id = pid
+                    st.session_state["just_onboarded"] = True
+                    st.rerun()
+            else:
+                st.warning("Please enter a name to continue.")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(
+            '''<p style="font-size:12px;color:#aaa;text-align:center;">
+            CareCircle is not a medical device. Always consult a doctor for medical decisions.<br>
+            Your data is private and encrypted. Only you can see it.
+            </p>''', unsafe_allow_html=True)
+    else:
+        st.markdown('''<div class="cc-header"><h1>🔵 CareCircle</h1>
+            <p>Keeping families informed, so they can be family — not coordinators.</p>
+        </div>''', unsafe_allow_html=True)
+        st.info("👈 Select a profile from the sidebar to get started.")
     st.stop()
 
 active_profile = next((p for p in profiles if p["id"]==st.session_state.active_profile_id), None)
@@ -833,6 +896,11 @@ if "Daily Briefing" in page:
     with c3: st.markdown(f'''<div class="metric-card"><div class="label">Lab Reports</div><div class="value">{len(labs)}</div><div class="sub">{'On file' if labs else 'None uploaded'}</div></div>''',unsafe_allow_html=True)
     with c4: st.markdown(f'''<div class="metric-card"><div class="label">Caregiver Updates</div><div class="value">{len(updates)}</div><div class="sub">{'Recent activity' if updates else 'No updates'}</div></div>''',unsafe_allow_html=True)
     st.markdown("<br>",unsafe_allow_html=True)
+    # Post-onboarding welcome
+    if st.session_state.pop("just_onboarded", False):
+        st.success(f"🎉 Profile created for {active_profile['name']}! Now upload their first prescription to get started.")
+        st.info("👆 Go to **💊 Medications** in the sidebar → Upload a prescription photo → Extract medications → Come back here to generate your first briefing.")
+
     if st.button("🔄 Generate Today's Briefing", use_container_width=True, type="primary"):
         with st.spinner("Generating briefing..."):
             st.session_state.briefing = generate_briefing(active_profile, meds, labs, updates, alerts)
