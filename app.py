@@ -924,7 +924,7 @@ if "Daily Briefing" in page:
     if st.secrets.get("TWILIO_SID"):
         st.markdown("---")
         st.markdown("#### 📱 Send WhatsApp Alerts Now")
-        wa_number = st.text_input("Meera's WhatsApp number", placeholder="919158750962", help="Enter number with country code, no +")
+        wa_number = st.text_input("WhatsApp number", placeholder="91XXXXXXXXXX", help="Enter number with country code, no +")
         if st.button("📤 Send WhatsApp Alerts", type="primary", use_container_width=True):
             if wa_number:
                 _appts = db_get_appointments(st.session_state.active_profile_id)
@@ -1157,8 +1157,8 @@ elif "Lab Reports" in page:
     st.markdown(f"### 🔬 {active_profile['name']}'s Lab Reports")
     with st.expander("➕ Add a lab result", expanded=True):
         c1,c2,c3=st.columns(3)
-        with c1: tn=st.text_input("Test name",placeholder="Fasting Blood Sugar"); tv=st.text_input("Value",placeholder="180"); tu=st.selectbox("Unit",["mg/dL","mmol/L","g/dL","%","IU/L","mEq/L","other"])
-        with c2: rr=st.text_input("Reference range",placeholder="70-100"); td=st.date_input("Date of test",value=date.today()); ln=st.text_input("Lab / Hospital")
+        with c1: tn=st.text_input("Test name"); tv=st.text_input("Value"); tu=st.selectbox("Unit",["mg/dL","mmol/L","g/dL","%","IU/L","mEq/L","other"])
+        with c2: rr=st.text_input("Reference range"); td=st.date_input("Date of test",value=date.today()); ln=st.text_input("Lab / Hospital")
         with c3:
             st.markdown("<br><br>",unsafe_allow_html=True)
             if st.button("➕ Add",type="primary",use_container_width=True):
