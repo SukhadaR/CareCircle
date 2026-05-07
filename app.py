@@ -506,6 +506,30 @@ def get_vital_trend(vitals, field, days=7):
     trend = "up" if vals[0] > vals[-1] else "down" if vals[0] < vals[-1] else "stable"
     return avg, trend
 
+def db_add_adherence(pid, entry):
+    sb = get_supabase()
+    if not sb: return False
+    user = st.session_state.get("user")
+    uid = user.id if user and hasattr(user, "id") else None
+    try:
+        sb.table("adherence").insert({**entry, "profile_id": pid, "user_id": uid}).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error saving adherence: {e}")
+        return False
+
+def db_get_adherence(pid):
+    sb = get_supabase()
+    if not sb: return []
+    try: return sb.table("adherence").select("*").eq("profile_id", pid).order("date", desc=True).execute().data or []
+    except: return []
+
+def db_delete_adherence(aid):
+    sb = get_supabase()
+    if not sb: return
+    try: sb.table("adherence").delete().eq("id", aid).execute()
+    except Exception as e: st.error(f"Error: {e}")
+
 def get_ai_client():
     key = st.session_state.get("api_key", "") or st.secrets.get("ANTHROPIC_API_KEY", "")
     if not key: return None
@@ -756,7 +780,7 @@ with st.sidebar:
         c1.metric("Lab Reports", len(labs)); c2.metric("Updates", len(updates))
         st.markdown("---")
         st.markdown("**Navigation**")
-        page = st.radio("", ["🏠  Daily Briefing","💊  Medications","📄  Prescriptions","🔬  Lab Reports","❤️  Vital Signs","🗣️  Caregiver Updates","📅  Appointments","⚠️  Alerts","💬  Ask CareCircle"], label_visibility="collapsed")
+        page = st.radio("", ["🏠  Daily Briefing","💊  Medications","📄  Prescriptions","🔬  Lab Reports","❤️  Vital Signs","✅  Adherence","🗣️  Caregiver Updates","📅  Appointments","⚠️  Alerts","💬  Ask CareCircle"], label_visibility="collapsed")
     else:
         meds=alerts=labs=updates=[]; page="🏠  Daily Briefing"
 
@@ -1196,6 +1220,121 @@ elif "Vital Signs" in page:
                     if st.button("🗑️", key=f"del_v_{v['id']}"):
                         db_delete_vital(v["id"]); st.rerun()
 
+
+elif "Adherence" in page:
+    st.markdown(f"### ✅ {active_profile['name']}'s Medication Adherence")
+    st.markdown("Track which medications were taken each day. One tap per medication.")
+
+    adherence = db_get_adherence(st.session_state.active_profile_id)
+    if st.session_state.pop("adherence_saved", False):
+        st.success("✅ Adherence logged.")
+
+    # Weekly compliance summary
+    if adherence:
+        last7 = adherence[:7]
+        taken_days = sum(1 for a in last7 if a.get("overall_taken"))
+        pct = int((taken_days / len(last7)) * 100)
+        col1, col2, col3 = st.columns(3)
+        color = "#2e7d32" if pct >= 80 else "#e65100" if pct >= 50 else "#cc0000"
+        with col1:
+            st.markdown(f'''<div class="metric-card">
+                <div class="label">7-day compliance</div>
+                <div class="value" style="color:{color}">{pct}%</div>
+                <div class="sub">{taken_days}/{len(last7)} days all meds taken</div>
+            </div>''', unsafe_allow_html=True)
+        # Streak
+        streak = 0
+        for a in adherence:
+            if a.get("overall_taken"): streak += 1
+            else: break
+        with col2:
+            st.markdown(f'''<div class="metric-card">
+                <div class="label">Current streak</div>
+                <div class="value">{streak}</div>
+                <div class="sub">consecutive days</div>
+            </div>''', unsafe_allow_html=True)
+        # Most missed
+        missed_counts = {}
+        for a in adherence[:14]:
+            for m in (a.get("missed_medications") or []):
+                missed_counts[m] = missed_counts.get(m, 0) + 1
+        if missed_counts:
+            most_missed = max(missed_counts, key=missed_counts.get)
+            with col3:
+                st.markdown(f'''<div class="metric-card">
+                    <div class="label">Most missed</div>
+                    <div class="value" style="font-size:18px">{most_missed}</div>
+                    <div class="sub">last 14 days</div>
+                </div>''', unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+
+    # Log form + history side by side
+    col_form, col_hist = st.columns([1, 1])
+
+    with col_form:
+        st.markdown("#### Log today")
+        a_date = st.date_input("Date", value=date.today(), key="a_date")
+        st.markdown("**Which medications were taken?**")
+
+        med_status = {}
+        if meds:
+            for m in meds:
+                med_status[m["name"]] = st.checkbox(
+                    f"{m['name']} {m['dosage']}",
+                    value=True,
+                    key=f"adh_{m['id']}"
+                )
+        else:
+            st.info("No medications in profile yet.")
+
+        overall = all(med_status.values()) if med_status else False
+        missed = [name for name, taken in med_status.items() if not taken]
+
+        a_notes = st.text_input("Notes (optional)", placeholder="e.g. took after dinner instead of before", key="a_notes")
+        logged_by = st.selectbox("Logged by", ["Meera", "Caretaker", "Dad"], key="a_logged_by")
+
+        if st.button("✅ Save Adherence", type="primary", use_container_width=True):
+            if med_status:
+                entry = {
+                    "id": str(uuid.uuid4())[:8],
+                    "date": str(a_date),
+                    "medications_taken": med_status,
+                    "overall_taken": overall,
+                    "missed_medications": missed,
+                    "notes": a_notes,
+                    "logged_by": logged_by,
+                    "date_ingested": datetime.now().strftime("%Y-%m-%d")
+                }
+                ok = db_add_adherence(st.session_state.active_profile_id, entry)
+                if ok:
+                    st.session_state["adherence_saved"] = True
+                    st.rerun()
+            else:
+                st.warning("Add medications first before logging adherence.")
+
+    with col_hist:
+        st.markdown("#### Adherence log")
+        if not adherence:
+            st.info("No entries yet. Log today on the left.")
+        else:
+            st.caption(f"{len(adherence)} day(s) logged. Most recent first.")
+            for a in adherence:
+                overall_ok = a.get("overall_taken", False)
+                missed = a.get("missed_medications") or []
+                icon = "✅" if overall_ok else "⚠️"
+                border = "#2e7d32" if overall_ok else "#e65100"
+                missed_str = f"Missed: {', '.join(missed)}" if missed else "All taken"
+                col_a, col_del = st.columns([9,1])
+                with col_a:
+                    st.markdown(f'''<div class="med-card" style="border-left-color:{border};padding:10px 14px;margin-bottom:6px">
+                        <div style="font-weight:600;font-size:13px;color:#1E3A5F">{icon} {a.get("date","")} &nbsp;
+                            <span style="font-weight:400;color:{"#2e7d32" if overall_ok else "#e65100"}">{missed_str}</span>
+                        </div>
+                        {f'<div style="font-size:11px;color:#888;margin-top:2px">Logged by {a["logged_by"]}{" — " + a["notes"] if a.get("notes") else ""}</div>' if a.get("logged_by") else ""}
+                    </div>''', unsafe_allow_html=True)
+                with col_del:
+                    if st.button("🗑️", key=f"del_adh_{a['id']}"):
+                        db_delete_adherence(a["id"]); st.rerun()
 
 elif "Caregiver" in page:
     st.markdown(f"### 🗣️ Caregiver Updates for {active_profile['name']}")
