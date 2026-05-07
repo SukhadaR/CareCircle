@@ -1087,6 +1087,8 @@ elif "Vital Signs" in page:
     st.markdown("Log daily readings. The system tracks trends and flags anything worth noting.")
 
     vitals = db_get_vitals(st.session_state.active_profile_id)
+    if st.session_state.pop("vital_saved", False):
+        st.success("✅ Reading saved successfully.")
 
     # Trend summary at top if data exists
     if vitals:
@@ -1177,7 +1179,7 @@ elif "Vital Signs" in page:
                 if heart_rate > 0: entry["heart_rate"] = heart_rate
                 if weight > 0: entry["weight"] = weight
                 db_add_vital(st.session_state.active_profile_id, entry)
-                st.success("✅ Reading saved.")
+                st.session_state["vital_saved"] = True
                 st.rerun()
 
     # History table
