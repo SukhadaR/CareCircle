@@ -477,16 +477,22 @@ def db_add_vital(pid, vital):
     sb = get_supabase()
     if not sb:
         st.error("No Supabase connection")
-        return
+        return False
     user = st.session_state.get("user")
     uid = user.id if user and hasattr(user, "id") else None
     try:
         data = {**vital, "profile_id": pid, "user_id": uid}
-        st.write(f"DEBUG inserting: {list(data.keys())} to vital_signs")
         result = sb.table("vital_signs").insert(data).execute()
-        st.write(f"DEBUG result: {result.data}")
+        if result.data:
+            return True
+        else:
+            st.error(f"Insert returned no data. Check Supabase logs.")
+            return False
     except Exception as e:
-        st.error(f"Insert error: {e}")
+        st.error(f"Insert failed: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+        return False
 
 def db_get_vitals(pid):
     sb = get_supabase()
