@@ -475,23 +475,14 @@ def days_until(date_str):
 
 def db_add_vital(pid, vital):
     sb = get_supabase()
-    if not sb:
-        st.error("No Supabase connection")
-        return False
+    if not sb: return False
     user = st.session_state.get("user")
     uid = user.id if user and hasattr(user, "id") else None
     try:
-        data = {**vital, "profile_id": pid, "user_id": uid}
-        result = sb.table("vital_signs").insert(data).execute()
-        if result.data:
-            return True
-        else:
-            st.error(f"Insert returned no data. Check Supabase logs.")
-            return False
+        sb.table("vital_signs").insert({**vital, "profile_id": pid, "user_id": uid}).execute()
+        return True
     except Exception as e:
-        st.error(f"Insert failed: {str(e)}")
-        import traceback
-        st.code(traceback.format_exc())
+        st.error(f"Error saving reading: {e}")
         return False
 
 def db_get_vitals(pid):
@@ -1170,8 +1161,10 @@ elif "Vital Signs" in page:
             if blood_sugar > 0: entry["blood_sugar"] = blood_sugar; entry["blood_sugar_type"] = bs_type
             if heart_rate > 0: entry["heart_rate"] = heart_rate
             if weight > 0: entry["weight"] = weight
-            db_add_vital(st.session_state.active_profile_id, entry)
-            st.session_state["vital_saved"] = True
+            ok = db_add_vital(st.session_state.active_profile_id, entry)
+            if ok:
+                st.session_state["vital_saved"] = True
+                st.rerun()
             st.rerun()
 
     with col_hist:
